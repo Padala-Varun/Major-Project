@@ -1,5 +1,7 @@
 # DevCopilot: AI-Powered Multi-Agent Codebase Assistant
 
+Updated by Ekshitha
+
 An intelligent system that transforms how developers explore, understand, and contribute to complex software repositories through advanced AI and graph-based knowledge representation.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue)
