@@ -3,7 +3,7 @@ uvicorn[standard]==0.30.6
 langchain==0.3.7
 langchain-google-genai==2.0.6
 langgraph==0.2.53
-faiss-cpu==1.9.0
+faiss-cpu==1.13.2
 networkx==3.4.2
 gitpython==3.1.43
 sentence-transformers==3.3.1
