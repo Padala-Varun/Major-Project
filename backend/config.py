@@ -54,4 +54,4 @@ TOP_K_RESULTS = 10
 # ── Server Settings ──────────────────────────────────────
 API_HOST = "0.0.0.0"
 API_PORT = 8000
-CORS_ORIGINS = ["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173"]
+CORS_ORIGINS = ["*"]
