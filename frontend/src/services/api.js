@@ -26,7 +26,7 @@ export async function ingestRepository(repoUrl, githubToken = null) {
   if (githubToken) {
     payload.github_token = githubToken;
   }
-  const response = await api.post('/ingest', payload, { timeout: 600000 }); // 10 min for large repos
+  const response = await api.post('/ingest', payload, { timeout: 30000 }); // Backend returns immediately
   return response.data;
 }
 

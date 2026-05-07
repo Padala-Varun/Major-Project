@@ -71,11 +71,10 @@ def set_state(key, value):
     _app_state[key] = value
 
 
-# ── Ingestion Endpoint ────────────────────────────────────
+# ── Background Ingestion Worker ───────────────────────────
 
-@router.post("/ingest", response_model=IngestResponse)
-async def ingest_repository(req: IngestRequest, background_tasks: BackgroundTasks):
-    """Ingest a GitHub repository: clone, parse, build graph, index vectors."""
+def _run_ingestion(repo_url: str, github_token: str = None):
+    """Run the heavy ingestion work in a background thread."""
     from ingestion.cloner import RepoCloner
     from ingestion.parser import CodeParser
     from ingestion.chunker import CodeChunker
@@ -86,17 +85,12 @@ async def ingest_repository(req: IngestRequest, background_tasks: BackgroundTask
     from agents.orchestrator import Orchestrator
     from config import GITHUB_TOKEN
 
-    if _app_state["ingestion_status"] == "processing":
-        raise HTTPException(status_code=409, detail="Ingestion already in progress")
-
-    _app_state["ingestion_status"] = "processing"
-
     try:
         # Step 1: Clone
         print("[INGEST] Step 1: Cloning repository...")
-        token = req.github_token or GITHUB_TOKEN
+        token = github_token or GITHUB_TOKEN
         cloner = RepoCloner()
-        repo_data = cloner.clone(req.repo_url, token=token)
+        repo_data = cloner.clone(repo_url, token=token)
         print(f"[INGEST] Cloned {repo_data['repo_name']}: {repo_data['file_count']} files")
 
         # Step 2: Parse files
@@ -180,23 +174,34 @@ async def ingest_repository(req: IngestRequest, background_tasks: BackgroundTask
         })
 
         print("[INGEST] ✅ Ingestion complete!")
-        return IngestResponse(
-            status="success",
-            repo_name=repo_data["repo_name"],
-            file_count=repo_data["file_count"],
-            graph_nodes=graph_stats["total_nodes"],
-            graph_edges=graph_stats["total_edges"],
-            chunks_indexed=len(all_chunks),
-            message=f"Successfully ingested {repo_data['repo_name']} with "
-                    f"{graph_stats['total_nodes']} nodes and {len(all_chunks)} chunks.",
-        )
 
     except Exception as e:
         print(f"[INGEST] ❌ ERROR: {str(e)}")
         traceback.print_exc()
         _app_state["ingestion_status"] = "error"
         _app_state["ingestion_error"] = str(e)
-        raise HTTPException(status_code=500, detail=f"Ingestion failed: {str(e)}")
+
+
+# ── Ingestion Endpoint ────────────────────────────────────
+
+@router.post("/ingest")
+async def ingest_repository(req: IngestRequest, background_tasks: BackgroundTasks):
+    """Ingest a GitHub repository: clone, parse, build graph, index vectors.
+    Runs in the background — poll /api/status to check progress."""
+
+    if _app_state["ingestion_status"] == "processing":
+        raise HTTPException(status_code=409, detail="Ingestion already in progress")
+
+    _app_state["ingestion_status"] = "processing"
+    _app_state["ingestion_error"] = None
+
+    # Run heavy work in background so the server stays responsive
+    background_tasks.add_task(_run_ingestion, req.repo_url, req.github_token)
+
+    return {
+        "status": "processing",
+        "message": "Ingestion started in background. Poll /api/status to check progress.",
+    }
 
 
 # ── Query Endpoint ────────────────────────────────────────
