@@ -26,16 +26,22 @@ export default function App() {
   }, []);
 
   const handleIngested = (data) => {
-    setStatus({
-      ingested: true,
-      repo_name: data.repo_name,
-      status: 'done',
-      details: {
-        repo: { file_count: data.file_count },
-        graph: { total_nodes: data.graph_nodes, total_edges: data.graph_edges },
-        faiss: { total_vectors: data.chunks_indexed },
-      },
-    });
+    // Accept both old IngestResponse shape and new status poll shape
+    if (data.details) {
+      // Coming from status poll — already in the right format
+      setStatus(data);
+    } else {
+      setStatus({
+        ingested: true,
+        repo_name: data.repo_name,
+        status: 'done',
+        details: {
+          repo: { file_count: data.file_count },
+          graph: { total_nodes: data.graph_nodes, total_edges: data.graph_edges },
+          faiss: { total_vectors: data.chunks_indexed },
+        },
+      });
+    }
   };
 
   return (

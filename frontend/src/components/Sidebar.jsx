@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { ingestRepository } from '../services/api';
+import React, { useState, useRef, useCallback } from 'react';
+import { ingestRepository, getStatus } from '../services/api';
 
 export default function Sidebar({ status, onIngested, onRepoUrlChange, onGithubTokenChange }) {
   const [repoUrl, setRepoUrl] = useState('');
@@ -7,21 +7,68 @@ export default function Sidebar({ status, onIngested, onRepoUrlChange, onGithubT
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
+  const [progressText, setProgressText] = useState('');
+  const pollRef = useRef(null);
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  const startPolling = useCallback(() => {
+    stopPolling();
+    pollRef.current = setInterval(async () => {
+      try {
+        const statusData = await getStatus();
+        if (statusData.status === 'done') {
+          stopPolling();
+          setLoading(false);
+          setProgressText('');
+          setResult({
+            message: `Successfully ingested ${statusData.repo_name}`,
+            file_count: statusData.details?.repo?.file_count,
+            graph_nodes: statusData.details?.graph?.total_nodes,
+            graph_edges: statusData.details?.graph?.total_edges,
+            chunks_indexed: statusData.details?.faiss?.total_vectors,
+          });
+          onIngested(statusData);
+        } else if (statusData.status === 'error') {
+          stopPolling();
+          setLoading(false);
+          setProgressText('');
+          setError(statusData.details?.error || 'Ingestion failed on server');
+        } else {
+          setProgressText('Cloning, parsing, building graph & indexing vectors...');
+        }
+      } catch (pollErr) {
+        // Ignore poll errors — server may be busy, keep trying
+        console.warn('Status poll failed, retrying...', pollErr.message);
+      }
+    }, 5000); // Poll every 5 seconds
+  }, [stopPolling, onIngested]);
 
   const handleIngest = async () => {
     if (!repoUrl.trim()) return;
     setLoading(true);
     setError(null);
     setResult(null);
+    setProgressText('Starting ingestion...');
 
     try {
-      const data = await ingestRepository(repoUrl.trim(), githubToken.trim() || null);
-      setResult(data);
-      onIngested(data);
+      await ingestRepository(repoUrl.trim(), githubToken.trim() || null);
+      // Backend returns immediately — start polling for completion
+      startPolling();
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || 'Ingestion failed');
-    } finally {
-      setLoading(false);
+      if (err.response?.status === 409) {
+        // Already processing — start polling
+        startPolling();
+      } else {
+        setError(err.response?.data?.detail || err.message || 'Ingestion failed');
+        setLoading(false);
+        setProgressText('');
+      }
     }
   };
 
@@ -94,9 +141,9 @@ export default function Sidebar({ status, onIngested, onRepoUrlChange, onGithubT
         {loading && (
           <div className="ingest-progress">
             <div className="progress-bar-bg">
-              <div className="progress-bar-fill" style={{ width: '60%' }} />
+              <div className="progress-bar-fill" style={{ width: '100%', animation: 'pulse 2s ease-in-out infinite' }} />
             </div>
-            <p className="progress-text">Cloning, parsing, building graph & indexing vectors...</p>
+            <p className="progress-text">{progressText || 'Processing...'}</p>
           </div>
         )}
 
