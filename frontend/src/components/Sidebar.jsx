@@ -38,7 +38,7 @@ export default function Sidebar({ status, onIngested, onRepoUrlChange, onGithubT
           stopPolling();
           setLoading(false);
           setProgressText('');
-          setError(statusData.details?.error || 'Ingestion failed on server');
+          setError(statusData.error || statusData.details?.error || 'Ingestion failed on server');
         } else {
           setProgressText('Cloning, parsing, building graph & indexing vectors...');
         }
@@ -64,8 +64,26 @@ export default function Sidebar({ status, onIngested, onRepoUrlChange, onGithubT
       if (err.response?.status === 409) {
         // Already processing — start polling
         startPolling();
+      } else if (!err.response) {
+        setError(
+          'Cannot reach the backend. Start it with: cd backend && uv run main.py'
+        );
+        setLoading(false);
+        setProgressText('');
       } else {
-        setError(err.response?.data?.detail || err.message || 'Ingestion failed');
+        const detail = err.response?.data?.detail;
+        const message = typeof detail === 'string'
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((d) => d.msg).join(', ')
+            : err.message;
+        if (message === 'Not Found') {
+          setError(
+            'API endpoint not found. Check VITE_API_BASE includes /api (e.g. http://localhost:8000/api).'
+          );
+        } else {
+          setError(message || 'Ingestion failed');
+        }
         setLoading(false);
         setProgressText('');
       }
