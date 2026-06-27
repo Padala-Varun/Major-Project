@@ -45,6 +45,7 @@ class StatusResponse(BaseModel):
     repo_name: Optional[str] = None
     status: str
     details: Optional[dict] = None
+    error: Optional[str] = None
 
 
 # ── Global state (set by main.py on startup) ─────────────
@@ -257,6 +258,7 @@ async def get_status():
         repo_name=_app_state.get("repo_name"),
         status=_app_state["ingestion_status"],
         details=details if details else None,
+        error=_app_state.get("ingestion_error") if _app_state["ingestion_status"] == "error" else None,
     )
 
 
