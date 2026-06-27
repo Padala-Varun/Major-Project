@@ -11,8 +11,8 @@ from agents.qa_agent import QAAgent
 from agents.codegen_agent import CodeGenAgent
 from agents.lld_agent import LLDAgent
 from agents.pr_agent import PRAgent
-from langchain_google_genai import ChatGoogleGenerativeAI
-from config import GEMINI_API_KEY, LLM_MODEL
+from langchain_mistralai import ChatMistralAI
+from config import MISTRAL_API_KEY, LLM_MODEL, LLM_MAX_TOKENS
 
 
 class Orchestrator:
@@ -30,10 +30,11 @@ class Orchestrator:
         self.pr_agent = PRAgent()
 
         # Router LLM
-        self.router_llm = ChatGoogleGenerativeAI(
+        self.router_llm = ChatMistralAI(
             model=LLM_MODEL,
-            google_api_key=GEMINI_API_KEY,
+            api_key=MISTRAL_API_KEY,
             temperature=0.0,
+            max_tokens=LLM_MAX_TOKENS,
         )
 
         # Build the LangGraph workflow

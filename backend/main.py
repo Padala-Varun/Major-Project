@@ -57,10 +57,33 @@ async def health():
 # ── Main ──────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
+
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    # Opt-in only: reload watches .venv inside backend/ and restarts mid-ingestion.
+    dev_reload = os.getenv("DEV_RELOAD", "").lower() in ("1", "true", "yes")
+
+    reload_dirs = [
+        os.path.join(backend_dir, name)
+        for name in (
+            "api",
+            "agents",
+            "ingestion",
+            "knowledge_graph",
+            "vector_store",
+            "explainability",
+        )
+    ]
+
     uvicorn.run(
         "main:app",
         host=API_HOST,
         port=API_PORT,
-        reload=True,
-        reload_excludes=["temp_repos/*", "faiss_indices/*", "*.index"],
+        reload=dev_reload,
+        reload_dirs=reload_dirs if dev_reload else None,
+        reload_includes=["*.py"],
+        reload_excludes=[
+            "**/.venv/**",
+            "**/__pycache__/**",
+            "**/*.pyc",
+        ],
     )
