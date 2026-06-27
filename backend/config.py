@@ -19,8 +19,11 @@ LLM_TEMPERATURE = 0.3
 LLM_MAX_TOKENS = 8192
 
 # ── Embedding Settings ───────────────────────────────────
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-EMBEDDING_DIMENSION = 384
+EMBEDDING_MODEL = "mistral-embed"
+EMBEDDING_DIMENSION = 1024
+EMBEDDING_BATCH_SIZE = 64
+EMBEDDING_MAX_CHARS = 6000
+EMBEDDING_PARALLEL_BATCHES = 4
 
 # ── Chunking Settings ────────────────────────────────────
 CHUNK_SIZE = 1500

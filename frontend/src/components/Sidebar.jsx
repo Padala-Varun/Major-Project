@@ -1,5 +1,8 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { ingestRepository, getStatus } from '../services/api';
+
+const POLL_INTERVAL_MS = 2000;
+const MAX_POLL_MS = 10 * 60 * 1000; // 10 minutes
 
 export default function Sidebar({ status, onIngested, onRepoUrlChange, onGithubTokenChange }) {
   const [repoUrl, setRepoUrl] = useState('');
@@ -9,45 +12,75 @@ export default function Sidebar({ status, onIngested, onRepoUrlChange, onGithubT
   const [result, setResult] = useState(null);
   const [progressText, setProgressText] = useState('');
   const pollRef = useRef(null);
+  const pollStartedAtRef = useRef(null);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
     }
+    pollStartedAtRef.current = null;
   }, []);
+
+  const applyDoneStatus = useCallback((statusData) => {
+    stopPolling();
+    setLoading(false);
+    setProgressText('');
+    setResult({
+      message: `Successfully ingested ${statusData.repo_name}`,
+      file_count: statusData.details?.repo?.file_count,
+      graph_nodes: statusData.details?.graph?.total_nodes,
+      graph_edges: statusData.details?.graph?.total_edges,
+      chunks_indexed: statusData.details?.faiss?.total_vectors,
+    });
+    onIngested(statusData);
+  }, [stopPolling, onIngested]);
+
+  const handleStatusUpdate = useCallback((statusData) => {
+    if (statusData.ingested || statusData.status === 'done') {
+      applyDoneStatus(statusData);
+      return true;
+    }
+    if (statusData.status === 'error') {
+      stopPolling();
+      setLoading(false);
+      setProgressText('');
+      setError(statusData.error || statusData.details?.error || 'Ingestion failed on server');
+      return true;
+    }
+    if (pollStartedAtRef.current && Date.now() - pollStartedAtRef.current > MAX_POLL_MS) {
+      stopPolling();
+      setLoading(false);
+      setProgressText('');
+      setError('Ingestion timed out. Check Modal logs or try again.');
+      return true;
+    }
+    setProgressText('Cloning, parsing, building graph & indexing vectors...');
+    return false;
+  }, [applyDoneStatus, stopPolling]);
+
+  const pollStatusOnce = useCallback(async () => {
+    const statusData = await getStatus();
+    return handleStatusUpdate(statusData);
+  }, [handleStatusUpdate]);
 
   const startPolling = useCallback(() => {
     stopPolling();
-    pollRef.current = setInterval(async () => {
+    pollStartedAtRef.current = Date.now();
+
+    const tick = async () => {
       try {
-        const statusData = await getStatus();
-        if (statusData.status === 'done') {
-          stopPolling();
-          setLoading(false);
-          setProgressText('');
-          setResult({
-            message: `Successfully ingested ${statusData.repo_name}`,
-            file_count: statusData.details?.repo?.file_count,
-            graph_nodes: statusData.details?.graph?.total_nodes,
-            graph_edges: statusData.details?.graph?.total_edges,
-            chunks_indexed: statusData.details?.faiss?.total_vectors,
-          });
-          onIngested(statusData);
-        } else if (statusData.status === 'error') {
-          stopPolling();
-          setLoading(false);
-          setProgressText('');
-          setError(statusData.error || statusData.details?.error || 'Ingestion failed on server');
-        } else {
-          setProgressText('Cloning, parsing, building graph & indexing vectors...');
-        }
+        await pollStatusOnce();
       } catch (pollErr) {
-        // Ignore poll errors — server may be busy, keep trying
         console.warn('Status poll failed, retrying...', pollErr.message);
       }
-    }, 5000); // Poll every 5 seconds
-  }, [stopPolling, onIngested]);
+    };
+
+    tick();
+    pollRef.current = setInterval(tick, POLL_INTERVAL_MS);
+  }, [stopPolling, pollStatusOnce]);
+
+  useEffect(() => () => stopPolling(), [stopPolling]);
 
   const handleIngest = async () => {
     if (!repoUrl.trim()) return;
@@ -58,15 +91,13 @@ export default function Sidebar({ status, onIngested, onRepoUrlChange, onGithubT
 
     try {
       await ingestRepository(repoUrl.trim(), githubToken.trim() || null);
-      // Backend returns immediately — start polling for completion
       startPolling();
     } catch (err) {
       if (err.response?.status === 409) {
-        // Already processing — start polling
         startPolling();
       } else if (!err.response) {
         setError(
-          'Cannot reach the backend. Start it with: cd backend && uv run main.py'
+          'Cannot reach the backend. Start it with: cd backend && python main.py'
         );
         setLoading(false);
         setProgressText('');
