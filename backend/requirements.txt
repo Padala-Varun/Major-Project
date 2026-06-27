@@ -6,10 +6,9 @@ langgraph==0.2.53
 faiss-cpu==1.13.2
 networkx==3.4.2
 gitpython==3.1.43
-sentence-transformers==3.3.1
 python-dotenv==1.0.1
 requests==2.32.3
 rich==13.9.4
 pydantic>=2.11.7
-tree-sitter==0.24.0
 aiofiles==24.1.0
+numpy>=1.26.0

@@ -74,8 +74,25 @@ def set_state(key, value):
 
 # ── Background Ingestion Worker ───────────────────────────
 
+def _parse_single_file(parser, file_info: dict) -> dict | None:
+    """Parse one repository file; returns None on failure."""
+    try:
+        with open(file_info["full_path"], "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        parsed = parser.parse_file(
+            file_info["path"], content, file_info["extension"]
+        )
+        parsed["content"] = content
+        return parsed
+    except Exception as parse_err:
+        print(f"[INGEST] Warning: Could not parse {file_info['path']}: {parse_err}")
+        return None
+
+
 def _run_ingestion(repo_url: str, github_token: str = None):
     """Run the heavy ingestion work in a background thread."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     from ingestion.cloner import RepoCloner
     from ingestion.parser import CodeParser
     from ingestion.chunker import CodeChunker
@@ -94,21 +111,20 @@ def _run_ingestion(repo_url: str, github_token: str = None):
         repo_data = cloner.clone(repo_url, token=token)
         print(f"[INGEST] Cloned {repo_data['repo_name']}: {repo_data['file_count']} files")
 
-        # Step 2: Parse files
+        # Step 2: Parse files (parallel I/O)
         print("[INGEST] Step 2: Parsing files...")
         parser = CodeParser()
         parsed_files = []
-        for file_info in repo_data["files"]:
-            try:
-                with open(file_info["full_path"], "r", encoding="utf-8", errors="ignore") as f:
-                    content = f.read()
-                parsed = parser.parse_file(
-                    file_info["path"], content, file_info["extension"]
-                )
-                parsed_files.append(parsed)
-            except Exception as parse_err:
-                print(f"[INGEST] Warning: Could not parse {file_info['path']}: {parse_err}")
-                continue
+        workers = min(8, max(1, len(repo_data["files"])))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(_parse_single_file, parser, file_info)
+                for file_info in repo_data["files"]
+            ]
+            for future in as_completed(futures):
+                parsed = future.result()
+                if parsed:
+                    parsed_files.append(parsed)
         print(f"[INGEST] Parsed {len(parsed_files)} files")
 
         # Step 3: Build knowledge graph
@@ -128,7 +144,7 @@ def _run_ingestion(repo_url: str, github_token: str = None):
             all_chunks.extend(chunks)
         print(f"[INGEST] Created {len(all_chunks)} chunks")
 
-        print("[INGEST] Step 5: Generating embeddings (this may take a moment)...")
+        print("[INGEST] Step 5: Generating embeddings via Mistral API...")
         embedder = Embedder()
         embeddings = embedder.embed_chunks(all_chunks)
         print(f"[INGEST] Generated {len(embeddings)} embeddings")
@@ -148,8 +164,7 @@ def _run_ingestion(repo_url: str, github_token: str = None):
             for c in all_chunks
         ]
         faiss_store.build_index(embeddings, chunk_metadata)
-        faiss_store.save(name="default")
-        print("[INGEST] FAISS index built and saved")
+        print("[INGEST] FAISS index built")
 
         # Step 7: Initialize orchestrator
         print("[INGEST] Step 7: Initializing orchestrator...")
