@@ -4,8 +4,8 @@ Generates new code aligned with the repository's existing architecture,
 coding style, and project dependencies.
 """
 
-from langchain_google_genai import ChatGoogleGenerativeAI
-from config import GEMINI_API_KEY, LLM_MODEL, LLM_TEMPERATURE
+from langchain_mistralai import ChatMistralAI
+from config import MISTRAL_API_KEY, LLM_MODEL, LLM_MAX_TOKENS
 from explainability.logger import ExplainabilityLogger
 
 
@@ -32,10 +32,11 @@ SIMILAR CODE FROM REPOSITORY:
 """
 
     def __init__(self):
-        self.llm = ChatGoogleGenerativeAI(
+        self.llm = ChatMistralAI(
             model=LLM_MODEL,
-            google_api_key=GEMINI_API_KEY,
+            api_key=MISTRAL_API_KEY,
             temperature=0.4,  # Slightly higher for creativity
+            max_tokens=LLM_MAX_TOKENS,
         )
 
     def run(self, state: dict) -> dict:

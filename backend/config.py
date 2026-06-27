@@ -10,11 +10,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── API Keys ──────────────────────────────────────────────
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 
 # ── LLM Settings ─────────────────────────────────────────
-LLM_MODEL = "gemini-2.5-flash"
+LLM_MODEL = "mistral-large-latest"
 LLM_TEMPERATURE = 0.3
 LLM_MAX_TOKENS = 8192
 

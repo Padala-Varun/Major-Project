@@ -5,8 +5,8 @@ traces dependencies, and highlights potential risks.
 """
 
 import requests
-from langchain_google_genai import ChatGoogleGenerativeAI
-from config import GEMINI_API_KEY, GITHUB_TOKEN, LLM_MODEL, LLM_TEMPERATURE
+from langchain_mistralai import ChatMistralAI
+from config import MISTRAL_API_KEY, GITHUB_TOKEN, LLM_MODEL, LLM_TEMPERATURE, LLM_MAX_TOKENS
 from explainability.logger import ExplainabilityLogger
 
 
@@ -46,10 +46,11 @@ PR METADATA:
 """
 
     def __init__(self):
-        self.llm = ChatGoogleGenerativeAI(
+        self.llm = ChatMistralAI(
             model=LLM_MODEL,
-            google_api_key=GEMINI_API_KEY,
+            api_key=MISTRAL_API_KEY,
             temperature=LLM_TEMPERATURE,
+            max_tokens=LLM_MAX_TOKENS,
         )
 
     def run(self, state: dict) -> dict:

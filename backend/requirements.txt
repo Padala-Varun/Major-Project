@@ -1,7 +1,7 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 langchain==0.3.7
-langchain-google-genai==2.0.6
+langchain-mistralai==0.2.1
 langgraph==0.2.53
 faiss-cpu==1.13.2
 networkx==3.4.2
