@@ -10,6 +10,7 @@ import AgentRun from './AgentRun';
 import Markdown from './Markdown';
 import TracePanel from './TracePanel';
 import CreatePRModal from './CreatePRModal';
+import ImpactCard from './ImpactCard';
 import { AgentIcon, BrandMark, CopyButton } from './ui';
 
 const SUGGESTIONS = [
@@ -40,13 +41,20 @@ function CriticSummary({ critic, revisions }) {
   );
 }
 
-function AssistantMessage({ msg, query, onTrace, onCreatePR }) {
+/** The answer a finished message shows: the last non-critic agent's output. */
+function answerOf(msg) {
+  const workers = msg.steps.filter((s) => s.agent !== 'critic');
+  return workers.length ? workers[workers.length - 1].response : msg.result?.response;
+}
+
+const HISTORY_TURNS = 6;
+
+function AssistantMessage({ msg, query, onTrace, onCreatePR, onShowImpact }) {
   const running = msg.status === 'running';
   const steps = msg.steps;
-  const workers = steps.filter((s) => s.agent !== 'critic');
-  const primary = workers[workers.length - 1];
   const critic = [...steps].reverse().find((s) => s.agent === 'critic');
-  const answer = primary ? primary.response : msg.result?.response;
+  const answer = answerOf(msg);
+  const impact = msg.result?.impact;
   const showRun = running || steps.length > 1;
   const log = msg.result?.explanation_log;
   const codeBlocks = msg.result?.code_blocks || [];
@@ -87,6 +95,7 @@ function AssistantMessage({ msg, query, onTrace, onCreatePR }) {
           <>
             <Markdown>{answer || 'No response was generated.'}</Markdown>
             <CriticSummary critic={critic} revisions={log?.revision_count} />
+            {impact && <ImpactCard impact={impact} onShowOnMap={() => onShowImpact(impact, query)} />}
             <div className="msg-actions">
               <CopyButton text={answer || ''} label="Copy" />
               {log && Object.keys(log).length > 0 && (
@@ -95,7 +104,7 @@ function AssistantMessage({ msg, query, onTrace, onCreatePR }) {
                 </button>
               )}
               {codeBlocks.length > 0 && (
-                <button className="btn btn-outline btn-sm" onClick={() => onCreatePR(codeBlocks, query)}>
+                <button className="btn btn-outline btn-sm" onClick={() => onCreatePR({ codeBlocks, title: query, impact, critic })}>
                   <GitPullRequest size={14} /> Open pull request
                 </button>
               )}
@@ -107,7 +116,9 @@ function AssistantMessage({ msg, query, onTrace, onCreatePR }) {
   );
 }
 
-export default function Chat({ mode, repo, repoUrl, githubToken, onWorkingChange, hidden, pendingPrompt }) {
+export default function Chat({
+  mode, repo, repoUrl, githubToken, onWorkingChange, onShowImpact, hidden, pendingPrompt,
+}) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [prNumber, setPrNumber] = useState('');
@@ -132,6 +143,12 @@ export default function Chat({ mode, repo, repoUrl, githubToken, onWorkingChange
     const query = (text ?? input).trim();
     if (!query || busy) return;
 
+    // Earlier turns so follow-ups ("now add tests for that") have context
+    const history = messages.flatMap((m) => {
+      if (m.role === 'user') return [{ role: 'user', content: m.content }];
+      return m.status === 'done' ? [{ role: 'assistant', content: answerOf(m) || '' }] : [];
+    }).slice(-HISTORY_TURNS);
+
     const id = Date.now();
     setMessages((prev) => [
       ...prev,
@@ -147,6 +164,7 @@ export default function Chat({ mode, repo, repoUrl, githubToken, onWorkingChange
       await streamQuery(
         {
           query,
+          history,
           repo,
           agentType: mode.agent,
           repoUrl,
@@ -230,7 +248,8 @@ export default function Chat({ mode, repo, repoUrl, githubToken, onWorkingChange
                 msg={msg}
                 query={messages[i - 1]?.content}
                 onTrace={setTrace}
-                onCreatePR={(codeBlocks, title) => setPrDraft({ codeBlocks, title })}
+                onCreatePR={setPrDraft}
+                onShowImpact={onShowImpact}
               />
             )))
           )}
@@ -278,6 +297,8 @@ export default function Chat({ mode, repo, repoUrl, githubToken, onWorkingChange
         <CreatePRModal
           codeBlocks={prDraft.codeBlocks}
           title={prDraft.title}
+          impact={prDraft.impact}
+          critic={prDraft.critic}
           repoUrl={repoUrl}
           githubToken={githubToken}
           onClose={() => setPrDraft(null)}

@@ -42,6 +42,7 @@ export default function App() {
   const [workingAgent, setWorkingAgent] = useState(null);
   const [chatKey, setChatKey] = useState(0);
   const [pendingPrompt, setPendingPrompt] = useState(null);
+  const [mapImpact, setMapImpact] = useState(null);  // { impact, label } shown on the map
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
@@ -68,6 +69,12 @@ export default function App() {
     if (data.repo_id) store('repo', data.repo_id);
     setShowConnect(false);
     setChatKey((k) => k + 1);
+    setMapImpact(null);
+    setView('map');
+  }, []);
+
+  const showImpact = useCallback((impact, label) => {
+    setMapImpact({ impact, label });
     setView('map');
   }, []);
 
@@ -169,7 +176,13 @@ export default function App() {
           <>
             <div className={`map-view ${view === 'map' ? '' : 'hidden'}`}>
               <Suspense fallback={<div className="map-state"><LoaderCircle size={20} className="spin" /></div>}>
-                <RepoMap repoId={repoId} theme={theme} onAsk={askTeam} />
+                <RepoMap
+                  repoId={repoId}
+                  theme={theme}
+                  onAsk={askTeam}
+                  impact={mapImpact}
+                  onClearImpact={() => setMapImpact(null)}
+                />
               </Suspense>
             </div>
             <Chat
@@ -180,6 +193,7 @@ export default function App() {
               repoUrl={repoUrl}
               githubToken={githubToken}
               onWorkingChange={setWorkingAgent}
+              onShowImpact={showImpact}
               pendingPrompt={pendingPrompt}
             />
           </>

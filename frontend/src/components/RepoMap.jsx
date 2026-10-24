@@ -2,9 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ForceGraph2D from 'react-force-graph-2d';
 import {
   ArrowLeft, CircleAlert, FlaskConical, LoaderCircle, Maximize, MessageSquare,
-  PencilRuler, Search, ShieldCheck, TriangleAlert,
+  PencilRuler, Search, ShieldCheck, TriangleAlert, X,
 } from 'lucide-react';
 import { getGraph } from '../services/api';
+import { ImpactBadge } from './ImpactCard';
 
 // Categorical slots in fixed order, validated (dataviz validate_palette.js) against
 // this app's light and dark surfaces. Modules past the 7th fold into "Other".
@@ -30,6 +31,7 @@ function readColors() {
     text2: v('--text-2'),
     border: v('--border-strong'),
     accent: v('--accent'),
+    danger: v('--danger'),
     surface: v('--surface'),
     bg: v('--bg'),
   };
@@ -45,6 +47,8 @@ function displayName(n, duplicated) {
   const parts = n.path.replace(/\\/g, '/').split('/');
   return parts.length > 1 ? `${parts[parts.length - 2]}/${n.name}` : n.name;
 }
+
+const normPath = (p) => p.replace(/\\/g, '/').replace(/^\.\//, '');
 
 function prepare(raw) {
   const seen = new Set();
@@ -67,6 +71,7 @@ function prepare(raw) {
   return {
     graph: { nodes, links: raw.links.map((l) => ({ ...l })) },
     byId,
+    idByPath: Object.fromEntries(nodes.map((n) => [normPath(n.path), n.id])),
     raw,
   };
 }
@@ -123,7 +128,7 @@ function FileLink({ node, color, onSelect, meta }) {
   );
 }
 
-export default function RepoMap({ repoId, theme, onAsk }) {
+export default function RepoMap({ repoId, theme, onAsk, impact, onClearImpact }) {
   const [state, setState] = useState({ loading: true, error: null, data: null });
   const [colorBy, setColorBy] = useState('module');
   const [selected, setSelected] = useState(null);
@@ -202,6 +207,16 @@ export default function RepoMap({ repoId, theme, onAsk }) {
     return new Set(data.graph.nodes.filter((n) => n.path.toLowerCase().includes(q)).map((n) => n.id));
   }, [search, data]);
 
+  // Impact mode: the files a change modifies and everything depending on them
+  const impactSets = useMemo(() => {
+    if (!impact || !data) return null;
+    const idOf = (p) => data.idByPath[normPath(p)];
+    return {
+      changed: new Set(impact.impact.changed.filter((c) => c.status === 'modified').map((c) => idOf(c.path)).filter(Boolean)),
+      affected: new Map(impact.impact.affected.map((a) => [idOf(a.path), a.depth]).filter(([id]) => id)),
+    };
+  }, [impact, data]);
+
   // Nodes in focus: a selection or hover shows the file and its direct dependencies
   const focus = useMemo(() => {
     const id = selected || hovered;
@@ -209,9 +224,10 @@ export default function RepoMap({ repoId, theme, onAsk }) {
       const n = data.byId[id];
       return new Set([id, ...n.inIds, ...n.outIds]);
     }
+    if (impactSets) return new Set([...impactSets.changed, ...impactSets.affected.keys()]);
     if (isolated && data) return new Set(data.graph.nodes.filter((n) => n.module === isolated).map((n) => n.id));
     return matches;
-  }, [selected, hovered, isolated, matches, data]);
+  }, [selected, hovered, isolated, matches, data, impactSets]);
 
   const anchor = selected || hovered;
 
@@ -237,6 +253,18 @@ export default function RepoMap({ repoId, theme, onAsk }) {
       ctx.stroke();
     }
 
+    if (impactSets?.changed.has(node.id) && !dim) {
+      // Pulsing ring so the changed file stands out even in a crowded graph
+      const pulse = (Math.sin(Date.now() / 260) + 1) / 2;
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, r + (3 + pulse * 5) / scale, 0, 2 * Math.PI);
+      ctx.lineWidth = 3 / scale;
+      ctx.strokeStyle = colors.danger;
+      ctx.globalAlpha = 0.45 + 0.55 * (1 - pulse);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
     if (node.id === selected) {
       ctx.beginPath();
       ctx.arc(node.x, node.y, r + 3.5 / scale + 1.5, 0, 2 * Math.PI);
@@ -245,8 +273,12 @@ export default function RepoMap({ repoId, theme, onAsk }) {
       ctx.stroke();
     }
 
-    const showLabel = !dim && (node.id === anchor || (focus && focus.has(node.id) && focus.size <= 40)
-      || node.hub || scale > 2.4);
+    // In impact mode only the change and its direct dependents are labeled, to keep it readable
+    const impactLabel = impactSets && !anchor
+      ? impactSets.changed.has(node.id) || impactSets.affected.get(node.id) === 1
+      : null;
+    const showLabel = !dim && (impactLabel ?? (node.id === anchor
+      || (focus && focus.has(node.id) && focus.size <= 40) || node.hub || scale > 2.4));
     if (showLabel) {
       const fs = Math.max(10 / scale, 2.2);
       ctx.font = `${node.id === anchor ? 600 : 500} ${fs}px Inter, sans-serif`;
@@ -259,7 +291,7 @@ export default function RepoMap({ repoId, theme, onAsk }) {
       ctx.fillText(node.name, node.x, node.y + r + 2.5 / scale);
     }
     ctx.globalAlpha = 1;
-  }, [focus, colorOf, colors, selected, anchor]);
+  }, [focus, colorOf, colors, selected, anchor, impactSets]);
 
   const paintHitArea = useCallback((node, color, ctx) => {
     ctx.fillStyle = color;
@@ -268,7 +300,10 @@ export default function RepoMap({ repoId, theme, onAsk }) {
     ctx.fill();
   }, []);
 
-  const linkTouchesAnchor = useCallback((l) => anchor && (l.source.id === anchor || l.target.id === anchor), [anchor]);
+  const linkTouchesAnchor = useCallback((l) => (anchor
+    ? l.source.id === anchor || l.target.id === anchor
+    : Boolean(impactSets && (impactSets.changed.has(l.target.id) || impactSets.affected.has(l.target.id))
+      && impactSets.affected.has(l.source.id))), [anchor, impactSets]);
 
   const select = useCallback((id, zoom = true) => {
     setSelected(id);
@@ -280,7 +315,14 @@ export default function RepoMap({ repoId, theme, onAsk }) {
     }
   }, [data]);
 
-  const fit = () => fgRef.current?.zoomToFit(500, 50);
+  const fit = () => fgRef.current?.zoomToFit(500, 50, impactSets ? (n) => focus?.has(n.id) : undefined);
+
+  // Frame the impact area when impact mode starts (after the layout has settled)
+  useEffect(() => {
+    if (!impactSets || !fittedRef.current) return undefined;
+    const t = setTimeout(() => fgRef.current?.zoomToFit(600, 60, (n) => focus?.has(n.id)), 100);
+    return () => clearTimeout(t);
+  }, [impactSets]);
 
   if (state.loading) {
     return <div className="map-state"><LoaderCircle size={20} className="spin" /> Mapping the architecture…</div>;
@@ -370,6 +412,17 @@ export default function RepoMap({ repoId, theme, onAsk }) {
             <span><span className="legend-dot hollow" /> Test file</span>
           </div>
         </div>
+
+        {impact && (
+          <div className="map-impact-banner">
+            <ImpactBadge level={impact.impact.level} />
+            <div className="map-impact-text">
+              <strong title={impact.label}>{impact.label || 'Proposed change'}</strong>
+              <span>{impact.impact.summary} Red rings mark changed files.</span>
+            </div>
+            <button className="icon-btn sm" onClick={onClearImpact} aria-label="Exit impact view"><X size={14} /></button>
+          </div>
+        )}
 
         {hov && hov.id !== selected && (
           <div className="map-tip" style={{ left: mouse.x + 14, top: mouse.y + 14 }}>

@@ -7,7 +7,7 @@ and performing semantic retrieval to provide grounded, contextual responses.
 from config import LLM_MODEL, LLM_TEMPERATURE
 from agents.llm import make_llm
 from explainability.logger import ExplainabilityLogger
-from agents.collaboration import format_prior_work
+from agents.collaboration import format_prior_work, history_messages
 
 
 class QAAgent:
@@ -71,6 +71,7 @@ WORK FROM OTHER AGENTS (build on it, don't repeat it):
 
         messages = [
             {"role": "system", "content": prompt},
+            *history_messages(state),
             {"role": "user", "content": query},
         ]
 

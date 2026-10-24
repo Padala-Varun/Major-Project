@@ -8,7 +8,7 @@ import requests
 from config import GITHUB_TOKEN, LLM_MODEL, LLM_TEMPERATURE
 from agents.llm import make_llm
 from explainability.logger import ExplainabilityLogger
-from agents.collaboration import format_prior_work
+from agents.collaboration import format_prior_work, history_messages
 
 
 class PRAgent:
@@ -163,6 +163,7 @@ WORK FROM OTHER AGENTS:
 
         messages = [
             {"role": "system", "content": prompt},
+            *history_messages(state),
             {"role": "user", "content": f"Analyze this pull request: {query}"},
         ]
 

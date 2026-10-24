@@ -10,6 +10,31 @@ from datetime import datetime
 from config import GITHUB_TOKEN
 
 
+def _github_error(resp, action: str, owner: str, repo: str) -> str:
+    """Explain a failed GitHub API call in terms the user can act on."""
+    try:
+        message = resp.json().get("message", "")
+    except ValueError:
+        message = resp.text[:200]
+    status = resp.status_code
+    if status == 401:
+        return ("GitHub rejected the token (expired or revoked). Create a new one and "
+                "update GITHUB_TOKEN on the backend or the token in Settings.")
+    if status == 403 and "not accessible by personal access token" in message:
+        return (f"Your GitHub token can't {action} in {owner}/{repo}. Give it Contents and "
+                "Pull requests write access for this repository (fine-grained token), "
+                "or use a classic token with the repo scope.")
+    if status == 403 and "rate limit" in message.lower():
+        return "GitHub's API rate limit was reached. Wait a few minutes and try again."
+    if status in (403, 404) and action != "read the repository":
+        return (f"You don't have write access to {owner}/{repo}. Connect a repository you "
+                "own, or fork this one and connect the fork.")
+    if status == 404:
+        return (f"Repository {owner}/{repo} wasn't found, or your token can't see it "
+                "(private repositories need the repo scope).")
+    return f"Couldn't {action}: {message or status}"
+
+
 def create_pull_request(
     repo_url: str,
     files: list[dict],
@@ -51,7 +76,8 @@ def create_pull_request(
     try:
         # Step 1: Get default branch and its latest commit SHA
         repo_resp = requests.get(api_base, headers=headers, timeout=15)
-        repo_resp.raise_for_status()
+        if not repo_resp.ok:
+            return {"error": _github_error(repo_resp, "read the repository", owner, repo)}
         repo_info = repo_resp.json()
         default_branch = repo_info.get("default_branch", "main")
 
@@ -59,7 +85,8 @@ def create_pull_request(
             f"{api_base}/git/refs/heads/{default_branch}",
             headers=headers, timeout=15,
         )
-        ref_resp.raise_for_status()
+        if not ref_resp.ok:
+            return {"error": _github_error(ref_resp, "read the default branch", owner, repo)}
         base_sha = ref_resp.json()["object"]["sha"]
 
         # Step 2: Create a new branch
@@ -88,7 +115,7 @@ def create_pull_request(
             if not ref_resp2.ok:
                 return {"error": f"Branch '{branch_name}' already exists and could not be accessed."}
         elif not create_ref_resp.ok:
-            return {"error": f"Failed to create branch: {create_ref_resp.json().get('message', create_ref_resp.text)}"}
+            return {"error": _github_error(create_ref_resp, "create a branch", owner, repo)}
 
         # Step 3: Create/update files on the new branch
         created_files = []
@@ -126,7 +153,7 @@ def create_pull_request(
             if put_resp.ok:
                 created_files.append(file_path)
             else:
-                return {"error": f"Failed to create file '{file_path}': {put_resp.json().get('message', put_resp.text)}"}
+                return {"error": _github_error(put_resp, f"write {file_path}", owner, repo)}
 
         if not created_files:
             return {"error": "No files were committed. Make sure file paths and content are provided."}
@@ -163,7 +190,7 @@ def create_pull_request(
                     "files_committed": created_files,
                     "message": f"Files committed to '{branch_name}'. A PR already exists for this branch.",
                 }
-            return {"error": f"Failed to create PR: {error_msg}"}
+            return {"error": _github_error(pr_resp, "open a pull request", owner, repo)}
 
         pr_data = pr_resp.json()
         return {

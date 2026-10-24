@@ -20,7 +20,9 @@ from agents.codegen_agent import CodeGenAgent
 from agents.lld_agent import LLDAgent
 from agents.pr_agent import PRAgent
 from agents.critic_agent import CriticAgent
-from agents.collaboration import AGENT_TITLES
+from agents.collaboration import AGENT_TITLES, history_summary
+from knowledge_graph.graph_map import build_map
+from knowledge_graph.impact import analyze_impact
 from config import MAX_AGENT_STEPS, MAX_REVISIONS
 from agents.llm import make_llm
 
@@ -61,6 +63,9 @@ GUIDELINES:
 - PR requests → "pr"; add "codegen" only if the user asks for fixes.
 - Never pick an agent that has already run. FINISH once the request is answered.
 
+EARLIER CONVERSATION (the request may refer to it):
+{history}
+
 USER REQUEST:
 {query}
 
@@ -88,8 +93,18 @@ Critic, Reviewer), never by id."""
         # Supervisor LLM
         self.supervisor_llm = make_llm(0.0)
 
+        self._map_data = None  # architecture map, built on first impact analysis
+
         # Build the LangGraph workflow
         self.workflow = self._build_workflow()
+
+    def _impact(self, code_blocks: list[dict]) -> dict | None:
+        """Impact analysis for generated code, from the file paths its blocks declare."""
+        if not self.graph_query:
+            return None
+        if self._map_data is None:
+            self._map_data = build_map(self.graph_query.graph)
+        return analyze_impact(self._map_data, [b.get("filename") for b in code_blocks])
 
     def _build_workflow(self) -> StateGraph:
         """Build the LangGraph state machine."""
@@ -176,6 +191,7 @@ Critic, Reviewer), never by id."""
         prompt = self.SUPERVISOR_PROMPT.format(
             has_pr="yes" if state.get("pr_number") else "no",
             query=state.get("query", ""),
+            history=history_summary(state),
             completed="\n\n".join(completed) or "Nothing yet.",
         )
 
@@ -223,6 +239,14 @@ Critic, Reviewer), never by id."""
 
     # ── Retrieval ──────────────────────────────────────────
 
+    @staticmethod
+    def _retrieval_query(state: AgentState) -> str:
+        """Search text: a follow-up ("add tests for that") is searched together
+        with the previous question, which names what "that" is."""
+        query = state.get("query", "")
+        earlier = [m.get("content", "") for m in state.get("chat_history", []) if m.get("role") == "user"]
+        return f"{earlier[-1][:500]}\n{query}" if earlier else query
+
     def _retrieve_context(self, state: AgentState) -> AgentState:
         """Retrieve relevant context from FAISS and knowledge graph."""
         query = state.get("query", "")
@@ -233,7 +257,7 @@ Critic, Reviewer), never by id."""
         # FAISS retrieval
         if self.faiss_store and self.embedder:
             try:
-                query_embedding = self.embedder.embed_query(query)
+                query_embedding = self.embedder.embed_query(self._retrieval_query(state))
                 retrieved_chunks = self.faiss_store.search(query_embedding, top_k=10)
             except Exception:
                 retrieved_chunks = []
@@ -308,6 +332,9 @@ Critic, Reviewer), never by id."""
                 "review": result.get("review") if name == "critic" else None,
                 "explanation_log": result.get("explanation_log", {}),
             }
+            if name == "codegen" and not error:
+                # Which files this code touches and what depends on them (the Critic sees this too)
+                record["impact"] = self._impact(record["code_blocks"])
             update = {"agent_outputs": state.get("agent_outputs", []) + [record]}
             if name == "critic":
                 update["review"] = result.get("review")
@@ -413,7 +440,8 @@ Critic, Reviewer), never by id."""
         }
 
     def process_query(self, query: str, agent_type: str = None,
-                      repo_url: str = None, pr_number: int = None) -> dict:
+                      repo_url: str = None, pr_number: int = None,
+                      chat_history: list[dict] = None) -> dict:
         """
         Process a user query through the multi-agent pipeline.
 
@@ -428,7 +456,7 @@ Critic, Reviewer), never by id."""
         """
         try:
             final = self.workflow.invoke(
-                self._initial_state(query, agent_type, repo_url, pr_number),
+                self._initial_state(query, agent_type, repo_url, pr_number, chat_history),
                 config={"recursion_limit": 50},
             )
             return self._result(final)
@@ -436,7 +464,8 @@ Critic, Reviewer), never by id."""
             return self._error_result(e, agent_type)
 
     def stream_query(self, query: str, agent_type: str = None,
-                     repo_url: str = None, pr_number: int = None):
+                     repo_url: str = None, pr_number: int = None,
+                     chat_history: list[dict] = None):
         """Same pipeline as process_query, yielding progress events as agents work.
 
         Events (dicts with a "type" key):
@@ -450,7 +479,7 @@ Critic, Reviewer), never by id."""
         seen_decisions = seen_outputs = 0
         try:
             for state in self.workflow.stream(
-                self._initial_state(query, agent_type, repo_url, pr_number),
+                self._initial_state(query, agent_type, repo_url, pr_number, chat_history),
                 config={"recursion_limit": 50},
                 stream_mode="values",
             ):
@@ -498,10 +527,13 @@ Critic, Reviewer), never by id."""
             "error": friendly_error(output["error"]) if output.get("error") else None,
             "approved": review.get("approved"),
             "score": review.get("score"),
+            "impact": output.get("impact"),
         }
 
     def _result(self, state: AgentState) -> dict:
+        codegen = next((o for o in reversed(state.get("agent_outputs", [])) if o["agent"] == "codegen"), None)
         return {
+            "impact": codegen.get("impact") if codegen else None,
             "response": state.get("response", ""),
             "agent_type": state.get("agent_type", "unknown"),
             "agent_trace": [o["agent"] for o in state.get("agent_outputs", [])],
@@ -525,12 +557,14 @@ Critic, Reviewer), never by id."""
         }
 
     def _initial_state(self, query: str, agent_type: str = None,
-                       repo_url: str = None, pr_number: int = None) -> AgentState:
+                       repo_url: str = None, pr_number: int = None,
+                       chat_history: list[dict] = None) -> AgentState:
         return {
             "query": query,
             "agent_type": agent_type,
             "repo_url": repo_url,
             "pr_number": pr_number,
+            "chat_history": chat_history or [],
             "retrieved_chunks": [],
             "graph_context": "",
             "graph_nodes": [],

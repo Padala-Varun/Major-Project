@@ -24,8 +24,13 @@ class IngestRequest(BaseModel):
     github_token: Optional[str] = Field(None, description="GitHub access token")
     refresh: bool = Field(False, description="Re-index even if the repo was ingested before")
 
+class ChatTurn(BaseModel):
+    role: str = Field(..., description="'user' or 'assistant'")
+    content: str
+
 class QueryRequest(BaseModel):
     query: str = Field(..., description="User query")
+    history: list[ChatTurn] = Field(default_factory=list, description="Earlier turns, oldest first")
     repo: Optional[str] = Field(None, description="Repo id from /ingest (defaults to the last one)")
     agent_type: Optional[str] = Field(None, description="Force agent: qa, codegen, lld, pr")
     repo_url: Optional[str] = Field(None, description="Repo URL for PR analysis")
@@ -39,6 +44,7 @@ class QueryResponse(BaseModel):
     code_blocks: list = []
     plan: Optional[dict] = None
     review: Optional[dict] = None
+    impact: Optional[dict] = None
     explanation_log: dict = {}
     status: str
 
@@ -238,6 +244,7 @@ def query_repository(req: QueryRequest):
         agent_type=req.agent_type,
         repo_url=req.repo_url or session.meta["repo_url"],
         pr_number=req.pr_number,
+        chat_history=[t.model_dump() for t in req.history],
     )
 
     return QueryResponse(
@@ -248,6 +255,7 @@ def query_repository(req: QueryRequest):
         code_blocks=result.get("code_blocks", []),
         plan=result.get("plan"),
         review=result.get("review"),
+        impact=result.get("impact"),
         explanation_log=result.get("explanation_log", {}),
         status=result.get("status", "success"),
     )
@@ -264,6 +272,7 @@ def query_repository_stream(req: QueryRequest):
         agent_type=req.agent_type,
         repo_url=req.repo_url or session.meta["repo_url"],
         pr_number=req.pr_number,
+        chat_history=[t.model_dump() for t in req.history],
     )
     sse = (f"data: {json.dumps(event, default=str)}\n\n" for event in events)
     return StreamingResponse(sse, media_type="text/event-stream",

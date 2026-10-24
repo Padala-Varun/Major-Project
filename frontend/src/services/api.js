@@ -56,8 +56,9 @@ export async function sendQuery(query, agentType = null, repoUrl = null, prNumbe
  * @param {Object} params - { query, repo, agentType, repoUrl, prNumber }
  * @param {(event: Object) => void} onEvent - called per event; the last has type "final"
  */
-export async function streamQuery({ query, repo, agentType, repoUrl, prNumber }, onEvent) {
+export async function streamQuery({ query, history, repo, agentType, repoUrl, prNumber }, onEvent) {
   const payload = { query };
+  if (history?.length) payload.history = history;
   if (repo) payload.repo = repo;
   if (agentType) payload.agent_type = agentType;
   if (repoUrl) payload.repo_url = repoUrl;

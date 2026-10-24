@@ -10,6 +10,7 @@ from config import LLM_MODEL
 from agents.llm import make_llm
 from explainability.logger import ExplainabilityLogger
 from agents.collaboration import format_prior_work, latest_output
+from knowledge_graph.impact import format_impact
 
 
 class CriticAgent:
@@ -79,7 +80,12 @@ WORK FROM OTHER AGENTS:
         )
         messages = [
             {"role": "system", "content": prompt},
-            {"role": "user", "content": f"Task: {query}\n\nCode to review:\n\n{draft['response']}"},
+            {"role": "user", "content": (
+                f"Task: {query}\n\n"
+                f"Impact analysis from the knowledge graph (weigh breakage risk accordingly):\n"
+                f"{format_impact(draft.get('impact'))}\n\n"
+                f"Code to review:\n\n{draft['response']}"
+            )},
         ]
 
         logger.log_llm_call("Code review against repository and plan", LLM_MODEL)

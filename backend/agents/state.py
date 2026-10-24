@@ -14,6 +14,7 @@ class AgentState(TypedDict, total=False):
     agent_type: Literal["qa", "codegen", "lld", "pr"]  # Routed agent
     repo_url: Optional[str]                 # For PR analysis
     pr_number: Optional[int]                # For PR analysis
+    chat_history: list[dict]                # Earlier turns: {"role": "user"|"assistant", "content"}
 
     # ── Context (populated by retrieval) ──────────────────
     retrieved_chunks: list[dict]            # FAISS search results
