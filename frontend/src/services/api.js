@@ -19,10 +19,11 @@ const api = axios.create({
  * Ingest a GitHub repository.
  * @param {string} repoUrl - GitHub repository URL
  * @param {string} [githubToken] - Optional GitHub access token
- * @returns {Promise<Object>} Ingestion result with stats
+ * @param {boolean} [refresh] - Re-index even if the repo was ingested before
+ * @returns {Promise<Object>} { status: "processing" | "done", repo_id }
  */
-export async function ingestRepository(repoUrl, githubToken = null) {
-  const payload = { repo_url: repoUrl };
+export async function ingestRepository(repoUrl, githubToken = null, refresh = false) {
+  const payload = { repo_url: repoUrl, refresh };
   if (githubToken) {
     payload.github_token = githubToken;
   }
@@ -38,8 +39,9 @@ export async function ingestRepository(repoUrl, githubToken = null) {
  * @param {number} [prNumber] - PR number for analysis
  * @returns {Promise<Object>} Agent response with explanation log
  */
-export async function sendQuery(query, agentType = null, repoUrl = null, prNumber = null) {
+export async function sendQuery(query, agentType = null, repoUrl = null, prNumber = null, repo = null) {
   const payload = { query };
+  if (repo) payload.repo = repo;
   if (agentType) payload.agent_type = agentType;
   if (repoUrl) payload.repo_url = repoUrl;
   if (prNumber) payload.pr_number = prNumber;
@@ -49,11 +51,77 @@ export async function sendQuery(query, agentType = null, repoUrl = null, prNumbe
 }
 
 /**
- * Get current system status.
+ * Send a query and receive agent progress as it happens.
+ * Falls back to the blocking /query endpoint on backends without streaming.
+ * @param {Object} params - { query, repo, agentType, repoUrl, prNumber }
+ * @param {(event: Object) => void} onEvent - called per event; the last has type "final"
+ */
+export async function streamQuery({ query, repo, agentType, repoUrl, prNumber }, onEvent) {
+  const payload = { query };
+  if (repo) payload.repo = repo;
+  if (agentType) payload.agent_type = agentType;
+  if (repoUrl) payload.repo_url = repoUrl;
+  if (prNumber) payload.pr_number = prNumber;
+
+  const res = await fetch(`${API_BASE}/query/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (res.status === 404 || res.status === 405) {
+    const result = await sendQuery(query, agentType, repoUrl, prNumber, repo);
+    onEvent({ type: 'final', ...result });
+    return;
+  }
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { detail = (await res.json()).detail || detail; } catch { /* not JSON */ }
+    throw new Error(detail);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const frames = buffer.split('\n\n');
+    buffer = frames.pop();
+    for (const frame of frames) {
+      const data = frame.split('\n').find((l) => l.startsWith('data: '));
+      if (data) onEvent(JSON.parse(data.slice(6)));
+    }
+  }
+}
+
+/**
+ * Get ingestion status and stats for a repository.
+ * @param {string} [repo] - Repo id (defaults to the server's last ingested repo)
  * @returns {Promise<Object>} Status with ingestion state and stats
  */
-export async function getStatus() {
-  const response = await api.get('/status');
+export async function getStatus(repo = null) {
+  const response = await api.get('/status', { params: repo ? { repo } : {} });
+  return response.data;
+}
+
+/**
+ * Repositories saved on the server, most recent first.
+ * @returns {Promise<Object>} { repos: [...], processing: repoId | null }
+ */
+export async function getRepos() {
+  const response = await api.get('/repos');
+  return response.data;
+}
+
+/**
+ * Architecture map: file dependency graph with modules, entry points and risk.
+ * @param {string} repo - Repo id
+ * @returns {Promise<Object>} { nodes, links, modules, hotspots, entry_points, stats }
+ */
+export async function getGraph(repo) {
+  const response = await api.get('/graph', { params: { repo } });
   return response.data;
 }
 

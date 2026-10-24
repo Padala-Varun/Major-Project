@@ -1,262 +1,122 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { ingestRepository, getStatus } from '../services/api';
+import React from 'react';
+import { FolderGit2, Moon, Plus, RefreshCw, Settings, Sun } from 'lucide-react';
+import { AGENTS, TEAM_ORDER } from '../agents';
+import { BRAND } from '../brand';
+import { AgentIcon, BrandMark, splitRepo } from './ui';
 
-const POLL_INTERVAL_MS = 2000;
-const MAX_POLL_MS = 10 * 60 * 1000; // 10 minutes
+function formatCount(n) {
+  if (n == null) return '—';
+  return n >= 10000 ? `${(n / 1000).toFixed(1)}k` : n.toLocaleString();
+}
 
-export default function Sidebar({ status, onIngested, onRepoUrlChange, onGithubTokenChange }) {
-  const [repoUrl, setRepoUrl] = useState('');
-  const [githubToken, setGithubToken] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [result, setResult] = useState(null);
-  const [progressText, setProgressText] = useState('');
-  const pollRef = useRef(null);
-  const pollStartedAtRef = useRef(null);
-
-  const stopPolling = useCallback(() => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-    pollStartedAtRef.current = null;
-  }, []);
-
-  const applyDoneStatus = useCallback((statusData) => {
-    stopPolling();
-    setLoading(false);
-    setProgressText('');
-    setResult({
-      message: `Successfully ingested ${statusData.repo_name}`,
-      file_count: statusData.details?.repo?.file_count,
-      graph_nodes: statusData.details?.graph?.total_nodes,
-      graph_edges: statusData.details?.graph?.total_edges,
-      chunks_indexed: statusData.details?.faiss?.total_vectors,
-    });
-    onIngested(statusData);
-  }, [stopPolling, onIngested]);
-
-  const handleStatusUpdate = useCallback((statusData) => {
-    if (statusData.ingested || statusData.status === 'done') {
-      applyDoneStatus(statusData);
-      return true;
-    }
-    if (statusData.status === 'error') {
-      stopPolling();
-      setLoading(false);
-      setProgressText('');
-      setError(statusData.error || statusData.details?.error || 'Ingestion failed on server');
-      return true;
-    }
-    if (pollStartedAtRef.current && Date.now() - pollStartedAtRef.current > MAX_POLL_MS) {
-      stopPolling();
-      setLoading(false);
-      setProgressText('');
-      setError('Ingestion timed out. Check Modal logs or try again.');
-      return true;
-    }
-    setProgressText('Cloning, parsing, building graph & indexing vectors...');
-    return false;
-  }, [applyDoneStatus, stopPolling]);
-
-  const pollStatusOnce = useCallback(async () => {
-    const statusData = await getStatus();
-    return handleStatusUpdate(statusData);
-  }, [handleStatusUpdate]);
-
-  const startPolling = useCallback(() => {
-    stopPolling();
-    pollStartedAtRef.current = Date.now();
-
-    const tick = async () => {
-      try {
-        await pollStatusOnce();
-      } catch (pollErr) {
-        console.warn('Status poll failed, retrying...', pollErr.message);
-      }
-    };
-
-    tick();
-    pollRef.current = setInterval(tick, POLL_INTERVAL_MS);
-  }, [stopPolling, pollStatusOnce]);
-
-  useEffect(() => () => stopPolling(), [stopPolling]);
-
-  const handleIngest = async () => {
-    if (!repoUrl.trim()) return;
-    setLoading(true);
-    setError(null);
-    setResult(null);
-    setProgressText('Starting ingestion...');
-
-    try {
-      await ingestRepository(repoUrl.trim(), githubToken.trim() || null);
-      startPolling();
-    } catch (err) {
-      if (err.response?.status === 409) {
-        startPolling();
-      } else if (!err.response) {
-        setError(
-          'Cannot reach the backend. Start it with: cd backend && python main.py'
-        );
-        setLoading(false);
-        setProgressText('');
-      } else {
-        const detail = err.response?.data?.detail;
-        const message = typeof detail === 'string'
-          ? detail
-          : Array.isArray(detail)
-            ? detail.map((d) => d.msg).join(', ')
-            : err.message;
-        if (message === 'Not Found') {
-          setError(
-            'API endpoint not found. Check VITE_API_BASE includes /api (e.g. http://localhost:8000/api).'
-          );
-        } else {
-          setError(message || 'Ingestion failed');
-        }
-        setLoading(false);
-        setProgressText('');
-      }
-    }
-  };
-
-  return (
-    <aside className="sidebar">
-      {/* Logo */}
-      <div className="sidebar-header">
-        <div className="header-logo">
-          <div className="header-logo-icon">⚡</div>
-          <div>
-            <h1>DevCopilot</h1>
-            <span>AI Codebase Assistant</span>
-          </div>
+function RepoCard({ status, ingesting, onConnect }) {
+  if (!status.ingested) {
+    return (
+      <div className="repo-card">
+        <div className="repo-card-head">
+          <div className="repo-card-icon"><FolderGit2 size={16} /></div>
+          <div className="repo-name">{ingesting ? 'Connecting…' : 'No repository'}</div>
         </div>
-      </div>
-
-      {/* Repository Input */}
-      <div className="sidebar-section">
-        <h3>Repository</h3>
-
-        <div className="input-group">
-          <label htmlFor="repo-url">GitHub Repository URL</label>
-          <input
-            id="repo-url"
-            type="text"
-            className="input-field"
-            placeholder="https://github.com/user/repo"
-            value={repoUrl}
-            onChange={(e) => {
-              setRepoUrl(e.target.value);
-              onRepoUrlChange?.(e.target.value);
-            }}
-            disabled={loading}
-          />
-        </div>
-
-        <div className="input-group">
-          <label htmlFor="github-token">GitHub Token (optional)</label>
-          <input
-            id="github-token"
-            type="password"
-            className="input-field"
-            placeholder="ghp_xxxxxxxxxxxx"
-            value={githubToken}
-            onChange={(e) => {
-              setGithubToken(e.target.value);
-              onGithubTokenChange?.(e.target.value);
-            }}
-            disabled={loading}
-          />
-        </div>
-
-        <button
-          className="btn btn-primary btn-full"
-          onClick={handleIngest}
-          disabled={loading || !repoUrl.trim()}
-          id="ingest-btn"
-        >
-          {loading ? (
-            <>
-              <div className="loading-spinner" />
-              Ingesting...
-            </>
-          ) : (
-            <>🔍 Ingest Repository</>
-          )}
-        </button>
-
-        {/* Loading Progress */}
-        {loading && (
-          <div className="ingest-progress">
-            <div className="progress-bar-bg">
-              <div className="progress-bar-fill" style={{ width: '100%', animation: 'pulse 2s ease-in-out infinite' }} />
-            </div>
-            <p className="progress-text">{progressText || 'Processing...'}</p>
-          </div>
-        )}
-
-        {/* Error */}
-        {error && (
-          <div className="error-banner">
-            ❌ {error}
-          </div>
-        )}
-
-        {/* Success */}
-        {result && (
-          <div className="success-banner">
-            ✅ {result.message}
-          </div>
-        )}
-
-        {/* Stats */}
-        {(result || status?.details) && (
+        {!ingesting && (
           <>
-            <h3 style={{ marginTop: 20 }}>Repository Stats</h3>
-            <div className="stats-grid">
-              <div className="stat-card">
-                <div className="stat-value">
-                  {result?.file_count || status?.details?.repo?.file_count || 0}
-                </div>
-                <div className="stat-label">Files</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-value">
-                  {result?.graph_nodes || status?.details?.graph?.total_nodes || 0}
-                </div>
-                <div className="stat-label">Graph Nodes</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-value">
-                  {result?.graph_edges || status?.details?.graph?.total_edges || 0}
-                </div>
-                <div className="stat-label">Edges</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-value">
-                  {result?.chunks_indexed || status?.details?.faiss?.total_vectors || 0}
-                </div>
-                <div className="stat-label">Chunks</div>
-              </div>
-            </div>
+            <p className="repo-card-empty">Connect a GitHub repository to brief the agent team.</p>
+            <button className="btn btn-outline btn-sm btn-block" onClick={onConnect}>
+              <Plus size={14} /> Connect repository
+            </button>
           </>
         )}
       </div>
+    );
+  }
 
-      {/* System Status */}
-      <div className="sidebar-section" style={{ borderTop: '1px solid var(--border-subtle)', flex: 'none' }}>
-        <h3>System Status</h3>
-        <div className="header-status">
-          <div className={`status-dot ${status?.ingested ? 'active' : loading ? 'loading' : ''}`} />
-          <span>
-            {status?.ingested
-              ? `Ready — ${status.repo_name}`
-              : loading
-                ? 'Processing...'
-                : 'No repository loaded'}
-          </span>
+  const d = status.details || {};
+  const { owner, name } = splitRepo(d.repo?.url, status.repo_name);
+  const stats = [
+    ['Files', d.repo?.file_count],
+    ['Graph nodes', d.graph?.total_nodes],
+    ['Edges', d.graph?.total_edges],
+    ['Chunks', d.faiss?.total_vectors],
+  ];
+
+  return (
+    <div className="repo-card">
+      <div className="repo-card-head">
+        <div className="repo-card-icon"><FolderGit2 size={16} /></div>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          {owner && <div className="repo-owner">{owner}</div>}
+          <div className="repo-name" title={name}>{name}</div>
         </div>
+        <button className="icon-btn sm" onClick={onConnect} title="Switch repository">
+          <RefreshCw size={13} />
+        </button>
+      </div>
+      <div className="repo-stats">
+        {stats.map(([label, value]) => (
+          <div className="repo-stat" key={label}>
+            <div className="repo-stat-value">{formatCount(value)}</div>
+            <div className="repo-stat-label">{label}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export default function Sidebar({
+  status, ingesting, workingAgent, open, theme,
+  onConnect, onOpenSettings, onToggleTheme,
+}) {
+  const statusText = status.ingested
+    ? 'Ready'
+    : ingesting ? 'Indexing repository…' : 'Waiting for a repository';
+  const dotClass = status.ingested ? 'ok' : ingesting ? 'busy' : '';
+
+  return (
+    <aside className={`sidebar ${open ? 'open' : ''}`}>
+      <div className="brand">
+        <BrandMark />
+        <div>
+          <div className="brand-name">{BRAND.name}</div>
+          <div className="brand-tag">{BRAND.tagline}</div>
+        </div>
+      </div>
+
+      <div className="side-scroll">
+        <div className="side-label">Repository</div>
+        <RepoCard status={status} ingesting={ingesting} onConnect={onConnect} />
+
+        <div className="side-label">Agent team</div>
+        {TEAM_ORDER.map((id) => {
+          const meta = AGENTS[id];
+          const active = workingAgent === id;
+          return (
+            <div
+              key={id}
+              className={`team-member ${active ? 'active' : ''}`}
+              style={{ '--agent-color': meta.color }}
+            >
+              <AgentIcon agent={id} />
+              <div style={{ minWidth: 0 }}>
+                <div className="team-name">{meta.name}</div>
+                <div className="team-role">{meta.role}</div>
+              </div>
+              {active && <span className="team-status">Working</span>}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="side-footer">
+        <div className="status-line">
+          <span className={`dot ${dotClass}`} />
+          <span>{statusText}</span>
+        </div>
+        <button className="icon-btn" onClick={onToggleTheme} title="Toggle theme">
+          {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+        </button>
+        <button className="icon-btn" onClick={onOpenSettings} title="Settings">
+          <Settings size={16} />
+        </button>
       </div>
     </aside>
   );
