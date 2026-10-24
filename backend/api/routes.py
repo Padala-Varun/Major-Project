@@ -1,13 +1,19 @@
 """
 FastAPI API Routes
 REST endpoints for DevCopilot: ingestion, querying, status, and graph stats.
+Every repository has its own session (see workspace.py); requests name the
+repo they target with a `repo` id, falling back to the last one ingested.
 """
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional
-import os
+import json
+import threading
 import traceback
+
+import workspace
 
 router = APIRouter()
 
@@ -16,60 +22,56 @@ router = APIRouter()
 class IngestRequest(BaseModel):
     repo_url: str = Field(..., description="GitHub repository URL")
     github_token: Optional[str] = Field(None, description="GitHub access token")
+    refresh: bool = Field(False, description="Re-index even if the repo was ingested before")
 
 class QueryRequest(BaseModel):
     query: str = Field(..., description="User query")
+    repo: Optional[str] = Field(None, description="Repo id from /ingest (defaults to the last one)")
     agent_type: Optional[str] = Field(None, description="Force agent: qa, codegen, lld, pr")
     repo_url: Optional[str] = Field(None, description="Repo URL for PR analysis")
     pr_number: Optional[int] = Field(None, description="PR number for analysis")
 
-class IngestResponse(BaseModel):
-    status: str
-    repo_name: str
-    file_count: int
-    graph_nodes: int
-    graph_edges: int
-    chunks_indexed: int
-    message: str
-
 class QueryResponse(BaseModel):
     response: str
     agent_type: str
+    agent_trace: list[str] = []
+    steps: list[dict] = []
     code_blocks: list = []
     plan: Optional[dict] = None
+    review: Optional[dict] = None
     explanation_log: dict = {}
     status: str
 
 class StatusResponse(BaseModel):
     ingested: bool
+    repo_id: Optional[str] = None
     repo_name: Optional[str] = None
     status: str
+    stage: Optional[str] = None
     details: Optional[dict] = None
     error: Optional[str] = None
 
 
-# ── Global state (set by main.py on startup) ─────────────
-# These are populated by the app's lifespan or ingestion endpoint
-_app_state = {
-    "ingested": False,
-    "repo_name": None,
-    "repo_data": None,
-    "graph_builder": None,
-    "graph_query": None,
-    "faiss_store": None,
-    "embedder": None,
-    "orchestrator": None,
-    "ingestion_status": "idle",  # idle, processing, done, error
-    "ingestion_error": None,
-}
+# ── Ingestion jobs ────────────────────────────────────────
+# One ingestion runs at a time (it is CPU- and API-heavy); status is per repo.
+_jobs: dict[str, dict] = {}      # repo id -> {"status", "stage", "error"}
+_jobs_lock = threading.Lock()
+_last_repo: dict = {"id": None}  # fallback for clients that don't send a repo id
 
 
-def get_state():
-    return _app_state
+def _active_job() -> Optional[str]:
+    return next((rid for rid, j in _jobs.items() if j["status"] == "processing"), None)
 
 
-def set_state(key, value):
-    _app_state[key] = value
+def _session_or_404(repo: Optional[str]):
+    repo_id = repo or _last_repo["id"]
+    session = workspace.get_session(repo_id) if repo_id else None
+    if not session:
+        raise HTTPException(
+            status_code=400,
+            detail="This repository isn't loaded. Connect it again to continue.",
+        )
+    return session
 
 
 # ── Background Ingestion Worker ───────────────────────────
@@ -89,7 +91,7 @@ def _parse_single_file(parser, file_info: dict) -> dict | None:
         return None
 
 
-def _run_ingestion(repo_url: str, github_token: str = None):
+def _run_ingestion(repo_id: str, repo_url: str, github_token: str = None):
     """Run the heavy ingestion work in a background thread."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -97,15 +99,14 @@ def _run_ingestion(repo_url: str, github_token: str = None):
     from ingestion.parser import CodeParser
     from ingestion.chunker import CodeChunker
     from knowledge_graph.graph_builder import GraphBuilder
-    from knowledge_graph.graph_query import GraphQuery
-    from vector_store.embedder import Embedder
     from vector_store.faiss_store import FAISSStore
-    from agents.orchestrator import Orchestrator
     from config import GITHUB_TOKEN
 
+    job = _jobs[repo_id]
     try:
         # Step 1: Clone
-        print("[INGEST] Step 1: Cloning repository...")
+        print(f"[INGEST] {repo_id} Step 1: Cloning repository...")
+        job["stage"] = "clone"
         token = github_token or GITHUB_TOKEN
         cloner = RepoCloner()
         repo_data = cloner.clone(repo_url, token=token)
@@ -113,6 +114,7 @@ def _run_ingestion(repo_url: str, github_token: str = None):
 
         # Step 2: Parse files (parallel I/O)
         print("[INGEST] Step 2: Parsing files...")
+        job["stage"] = "parse"
         parser = CodeParser()
         parsed_files = []
         workers = min(8, max(1, len(repo_data["files"])))
@@ -129,14 +131,15 @@ def _run_ingestion(repo_url: str, github_token: str = None):
 
         # Step 3: Build knowledge graph
         print("[INGEST] Step 3: Building knowledge graph...")
+        job["stage"] = "graph"
         graph_builder = GraphBuilder()
         graph = graph_builder.build_from_parsed_files(parsed_files)
-        graph_query_obj = GraphQuery(graph)
         graph_stats = graph_builder.get_stats()
         print(f"[INGEST] Graph: {graph_stats['total_nodes']} nodes, {graph_stats['total_edges']} edges")
 
         # Step 4: Chunk and embed
         print("[INGEST] Step 4: Chunking code...")
+        job["stage"] = "embed"
         chunker = CodeChunker()
         all_chunks = []
         for pf in parsed_files:
@@ -145,12 +148,12 @@ def _run_ingestion(repo_url: str, github_token: str = None):
         print(f"[INGEST] Created {len(all_chunks)} chunks")
 
         print("[INGEST] Step 5: Generating embeddings via Mistral API...")
-        embedder = Embedder()
-        embeddings = embedder.embed_chunks(all_chunks)
+        embeddings = workspace.get_embedder().embed_chunks(all_chunks)
         print(f"[INGEST] Generated {len(embeddings)} embeddings")
 
         # Step 6: Build FAISS index
         print("[INGEST] Step 6: Building FAISS index...")
+        job["stage"] = "index"
         faiss_store = FAISSStore()
         chunk_metadata = [
             {
@@ -166,36 +169,17 @@ def _run_ingestion(repo_url: str, github_token: str = None):
         faiss_store.build_index(embeddings, chunk_metadata)
         print("[INGEST] FAISS index built")
 
-        # Step 7: Initialize orchestrator
-        print("[INGEST] Step 7: Initializing orchestrator...")
-        orchestrator = Orchestrator(
-            graph_query=graph_query_obj,
-            faiss_store=faiss_store,
-            embedder=embedder,
-        )
-        print("[INGEST] Orchestrator ready")
-
-        # Update global state
-        _app_state.update({
-            "ingested": True,
-            "repo_name": repo_data["repo_name"],
-            "repo_data": repo_data,
-            "graph_builder": graph_builder,
-            "graph_query": graph_query_obj,
-            "faiss_store": faiss_store,
-            "embedder": embedder,
-            "orchestrator": orchestrator,
-            "ingestion_status": "done",
-            "ingestion_error": None,
-        })
-
-        print("[INGEST] ✅ Ingestion complete!")
+        # Step 7: Save to disk and load the session (graph, index, orchestrator)
+        print("[INGEST] Step 7: Saving repository session...")
+        workspace.save_session(repo_id, repo_data, graph, faiss_store)
+        _last_repo["id"] = repo_id
+        job.update(status="done", stage=None)
+        print(f"[INGEST] ✅ {repo_id} ingested")
 
     except Exception as e:
         print(f"[INGEST] ❌ ERROR: {str(e)}")
         traceback.print_exc()
-        _app_state["ingestion_status"] = "error"
-        _app_state["ingestion_error"] = str(e)
+        job.update(status="error", stage=None, error=str(e))
 
 
 # ── Ingestion Endpoint ────────────────────────────────────
@@ -203,101 +187,146 @@ def _run_ingestion(repo_url: str, github_token: str = None):
 @router.post("/ingest")
 async def ingest_repository(req: IngestRequest, background_tasks: BackgroundTasks):
     """Ingest a GitHub repository: clone, parse, build graph, index vectors.
-    Runs in the background — poll /api/status to check progress."""
+    Returns a repo id at once; poll /api/status?repo=<id> for progress.
+    A repo ingested before reopens instantly unless `refresh` is set."""
+    repo_id = workspace.repo_id_from_url(req.repo_url)
 
-    if _app_state["ingestion_status"] == "processing":
-        raise HTTPException(status_code=409, detail="Ingestion already in progress")
+    if not req.refresh and workspace.get_session(repo_id):
+        _last_repo["id"] = repo_id
+        return {"status": "done", "repo_id": repo_id, "message": "Repository loaded from cache."}
 
-    _app_state["ingestion_status"] = "processing"
-    _app_state["ingestion_error"] = None
+    with _jobs_lock:
+        active = _active_job()
+        if active:
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "Another repository is being ingested.", "repo_id": active},
+            )
+        _jobs[repo_id] = {"status": "processing", "stage": "clone", "error": None}
 
     # Run heavy work in background so the server stays responsive
-    background_tasks.add_task(_run_ingestion, req.repo_url, req.github_token)
+    background_tasks.add_task(_run_ingestion, repo_id, req.repo_url, req.github_token)
 
     return {
         "status": "processing",
+        "repo_id": repo_id,
         "message": "Ingestion started in background. Poll /api/status to check progress.",
+    }
+
+
+@router.get("/repos")
+async def list_repositories():
+    """Repositories saved on this server, most recent first."""
+    return {
+        "repos": [
+            {k: m.get(k) for k in ("id", "repo_name", "repo_url", "file_count", "ingested_at")}
+            for m in workspace.list_repos()
+        ],
+        "processing": _active_job(),
     }
 
 
 # ── Query Endpoint ────────────────────────────────────────
 
 @router.post("/query", response_model=QueryResponse)
-async def query_repository(req: QueryRequest):
+def query_repository(req: QueryRequest):
     """Send a query to the multi-agent system."""
-    if not _app_state["ingested"] or not _app_state["orchestrator"]:
-        raise HTTPException(
-            status_code=400,
-            detail="No repository ingested. Please ingest a repository first."
-        )
+    session = _session_or_404(req.repo)
 
-    orchestrator = _app_state["orchestrator"]
-
-    result = orchestrator.process_query(
+    result = session.orchestrator.process_query(
         query=req.query,
         agent_type=req.agent_type,
-        repo_url=req.repo_url or (_app_state["repo_data"] or {}).get("repo_url"),
+        repo_url=req.repo_url or session.meta["repo_url"],
         pr_number=req.pr_number,
     )
 
     return QueryResponse(
         response=result.get("response", ""),
         agent_type=result.get("agent_type", "unknown"),
+        agent_trace=result.get("agent_trace", []),
+        steps=result.get("steps", []),
         code_blocks=result.get("code_blocks", []),
         plan=result.get("plan"),
+        review=result.get("review"),
         explanation_log=result.get("explanation_log", {}),
         status=result.get("status", "success"),
     )
 
 
+@router.post("/query/stream")
+def query_repository_stream(req: QueryRequest):
+    """Like /query, but streams agent progress as Server-Sent Events.
+    The last event has type "final" and carries the full /query response."""
+    session = _session_or_404(req.repo)
+
+    events = session.orchestrator.stream_query(
+        query=req.query,
+        agent_type=req.agent_type,
+        repo_url=req.repo_url or session.meta["repo_url"],
+        pr_number=req.pr_number,
+    )
+    sse = (f"data: {json.dumps(event, default=str)}\n\n" for event in events)
+    return StreamingResponse(sse, media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 # ── Status Endpoint ──────────────────────────────────────
 
 @router.get("/status", response_model=StatusResponse)
-async def get_status():
-    """Get the current system status."""
-    details = {}
-    if _app_state["ingested"]:
-        if _app_state["graph_builder"]:
-            details["graph"] = _app_state["graph_builder"].get_stats()
-        if _app_state["faiss_store"]:
-            details["faiss"] = _app_state["faiss_store"].get_stats()
-        if _app_state["repo_data"]:
-            details["repo"] = {
-                "name": _app_state["repo_data"]["repo_name"],
-                "file_count": _app_state["repo_data"]["file_count"],
-                "url": _app_state["repo_data"]["repo_url"],
-            }
+def get_status(repo: Optional[str] = None):
+    """Ingestion progress and stats for one repository (default: the last ingested)."""
+    repo_id = repo or _last_repo["id"]
+    job = _jobs.get(repo_id) if repo_id else None
 
-    return StatusResponse(
-        ingested=_app_state["ingested"],
-        repo_name=_app_state.get("repo_name"),
-        status=_app_state["ingestion_status"],
-        details=details if details else None,
-        error=_app_state.get("ingestion_error") if _app_state["ingestion_status"] == "error" else None,
-    )
+    if job and job["status"] == "processing":
+        return StatusResponse(ingested=False, repo_id=repo_id, status="processing", stage=job["stage"])
+
+    session = workspace.get_session(repo_id) if repo_id else None
+    if session:
+        return StatusResponse(
+            ingested=True,
+            repo_id=repo_id,
+            repo_name=session.meta["repo_name"],
+            status="done",
+            details=session.details(),
+        )
+
+    if job and job["status"] == "error":
+        return StatusResponse(ingested=False, repo_id=repo_id, status="error", error=job["error"])
+
+    return StatusResponse(ingested=False, repo_id=repo_id, status="idle")
+
+
+# ── Architecture Map Endpoint ─────────────────────────────
+
+@router.get("/graph")
+def get_graph_map(repo: Optional[str] = None):
+    """File-level dependency map with modules, entry points and risk scores."""
+    from knowledge_graph.graph_map import build_map
+
+    session = _session_or_404(repo)
+    if not hasattr(session, "map_cache"):
+        session.map_cache = build_map(session.graph_builder.graph)
+    return session.map_cache
 
 
 # ── Graph Stats Endpoint ─────────────────────────────────
 
 @router.get("/graph-stats")
-async def get_graph_stats():
+def get_graph_stats(repo: Optional[str] = None):
     """Get knowledge graph statistics."""
-    if not _app_state["ingested"] or not _app_state["graph_builder"]:
-        raise HTTPException(status_code=400, detail="No repository ingested.")
-
-    stats = _app_state["graph_builder"].get_stats()
+    session = _session_or_404(repo)
+    stats = session.graph_builder.get_stats()
 
     # Add some sample nodes for visualization
-    graph_query = _app_state["graph_query"]
-    if graph_query:
-        stats["sample_files"] = [
-            {"id": n["id"], "name": n.get("name", ""), "path": n.get("path", "")}
-            for n in graph_query.find_nodes_by_type("file")[:20]
-        ]
-        stats["sample_classes"] = [
-            {"id": n["id"], "name": n.get("name", ""), "file": n.get("file_path", "")}
-            for n in graph_query.find_nodes_by_type("class")[:20]
-        ]
+    stats["sample_files"] = [
+        {"id": n["id"], "name": n.get("name", ""), "path": n.get("path", "")}
+        for n in session.graph_query.find_nodes_by_type("file")[:20]
+    ]
+    stats["sample_classes"] = [
+        {"id": n["id"], "name": n.get("name", ""), "file": n.get("file_path", "")}
+        for n in session.graph_query.find_nodes_by_type("class")[:20]
+    ]
 
     return stats
 

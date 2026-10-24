@@ -36,7 +36,7 @@ def create_pull_request(
     """
     token = github_token or GITHUB_TOKEN
     if not token or len(token) < 10:
-        return {"error": "A valid GitHub token is required to create pull requests. Please provide one in the sidebar."}
+        return {"error": "A valid GitHub token is required to create pull requests. Add one in Settings or set GITHUB_TOKEN on the backend."}
 
     # Parse owner/repo
     parts = repo_url.rstrip("/").removesuffix(".git").split("/")

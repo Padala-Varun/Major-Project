@@ -7,6 +7,8 @@ import os
 import networkx as nx
 from typing import Optional
 
+from knowledge_graph.import_resolver import ImportResolver
+
 
 class GraphBuilder:
     """Builds a knowledge graph representing code structure and relationships."""
@@ -34,6 +36,7 @@ class GraphBuilder:
             self._add_file_nodes(file_data)
 
         # Phase 2: Add import/dependency edges
+        self._resolver = ImportResolver([f["file_path"] for f in parsed_files])
         for file_data in parsed_files:
             self._add_import_edges(file_data, parsed_files)
 
@@ -116,8 +119,8 @@ class GraphBuilder:
 
         for imp in file_data.get("imports", []):
             # Try to resolve import to a file in the repo
-            target_file = self._resolve_import(imp, all_files)
-            if target_file:
+            target_file = self._resolver.resolve(imp, file_path)
+            if target_file and target_file != file_path:
                 target_node_id = f"file:{target_file}"
                 if self.graph.has_node(target_node_id):
                     self.graph.add_edge(
@@ -125,23 +128,6 @@ class GraphBuilder:
                         relationship="imports",
                         import_name=imp,
                     )
-
-    def _resolve_import(self, import_name: str, all_files: list[dict]) -> Optional[str]:
-        """Try to resolve an import string to a file path in the repo."""
-        # Convert dotted import to path
-        import_path = import_name.replace(".", "/")
-
-        for file_data in all_files:
-            fp = file_data["file_path"]
-            # Check if import matches file path
-            if import_path in fp.replace("\\", "/"):
-                return fp
-            # Check file stem
-            stem = os.path.splitext(os.path.basename(fp))[0]
-            if stem == import_name.split(".")[-1]:
-                return fp
-
-        return None
 
     def _find_class_node(self, class_name: str) -> Optional[str]:
         """Find a class node by name."""

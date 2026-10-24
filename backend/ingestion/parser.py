@@ -90,7 +90,10 @@ class CodeParser:
 
         classes = self._extract_classes(content, patterns, file_path)
         functions = self._extract_functions(content, patterns, file_path)
-        imports = self._extract_imports(content, patterns)
+        if lang == "python":
+            imports = self._extract_python_imports(content)
+        else:
+            imports = self._extract_imports(content, patterns)
         docstring = self._extract_module_docstring(content, lang)
 
         return {
@@ -184,6 +187,33 @@ class CodeParser:
                     imports.append(group.strip())
 
         return list(set(imports))
+
+    PY_FROM_IMPORT = re.compile(
+        r"^[ \t]*from\s+(\.*[\w.]*)\s+import\s+(\([^)]*\)|[^\n#]+)", re.MULTILINE
+    )
+    PY_IMPORT = re.compile(r"^[ \t]*import\s+([\w., \t]+?)[ \t]*(?:#.*)?$", re.MULTILINE)
+
+    def _extract_python_imports(self, content: str) -> list[str]:
+        """Module specifiers a Python file imports.
+
+        `from pkg import name` yields both "pkg" and "pkg.name" (name may be a
+        submodule; the resolver falls back to "pkg"). Relative imports keep
+        their leading dots: `from . import app` → ".app".
+        """
+        specs = set()
+        for module, names in self.PY_FROM_IMPORT.findall(content):
+            if module.strip("."):
+                specs.add(module)
+            for name in names.strip("()").replace("\\", " ").split(","):
+                name = name.split(" as ")[0].strip()
+                if name and name != "*" and name.isidentifier():
+                    specs.add(f"{module}{name}" if module.endswith(".") else f"{module}.{name}")
+        for group in self.PY_IMPORT.findall(content):
+            for part in group.split(","):
+                name = part.split(" as ")[0].strip()
+                if name:
+                    specs.add(name)
+        return sorted(specs)
 
     def _extract_module_docstring(self, content: str, lang: str) -> Optional[str]:
         """Extract the module-level docstring (Python only for now)."""
