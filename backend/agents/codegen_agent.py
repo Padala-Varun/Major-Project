@@ -4,9 +4,10 @@ Generates new code aligned with the repository's existing architecture,
 coding style, and project dependencies.
 """
 
-from langchain_mistralai import ChatMistralAI
-from config import MISTRAL_API_KEY, LLM_MODEL, LLM_MAX_TOKENS
+from config import LLM_MODEL
+from agents.llm import make_llm
 from explainability.logger import ExplainabilityLogger
+from agents.collaboration import format_prior_work, latest_output
 
 
 class CodeGenAgent:
@@ -29,15 +30,23 @@ EXISTING CODE PATTERNS:
 
 SIMILAR CODE FROM REPOSITORY:
 {code_chunks}
+
+WORK FROM OTHER AGENTS (if a design plan is present, implement it):
+{prior_work}
+"""
+
+    REVISION_PROMPT = """A code reviewer rejected your previous attempt. Fix every issue it raised
+and return the complete revised code (not just a diff).
+
+REVIEWER FEEDBACK:
+{feedback}
+
+ISSUES:
+{issues}
 """
 
     def __init__(self):
-        self.llm = ChatMistralAI(
-            model=LLM_MODEL,
-            api_key=MISTRAL_API_KEY,
-            temperature=0.4,  # Slightly higher for creativity
-            max_tokens=LLM_MAX_TOKENS,
-        )
+        self.llm = make_llm(0.4)  # Slightly higher for creativity
 
     def run(self, state: dict) -> dict:
         """Execute the code generation agent."""
@@ -66,14 +75,34 @@ SIMILAR CODE FROM REPOSITORY:
         prompt = self.SYSTEM_PROMPT.format(
             graph_context=graph_context,
             code_chunks=code_chunks_text,
+            prior_work=format_prior_work(state, exclude=("codegen", "critic")),
         )
-
-        logger.log_llm_call("Code generation with architecture alignment", LLM_MODEL)
 
         messages = [
             {"role": "system", "content": prompt},
             {"role": "user", "content": f"Generate code for: {query}"},
         ]
+
+        # Revision round: the critic rejected the last draft
+        review = state.get("review")
+        previous = latest_output(state, "codegen")
+        if review and not review.get("approved") and previous:
+            issues = "\n".join(
+                f"- [{i.get('severity', 'issue')}] {i.get('description', '')}"
+                for i in review.get("issues", [])
+            ) or "- (none listed)"
+            messages.append({"role": "assistant", "content": previous["response"]})
+            messages.append({"role": "user", "content": self.REVISION_PROMPT.format(
+                feedback=review.get("feedback", ""),
+                issues=issues,
+            )})
+            logger.log_step("revising", {
+                "round": state.get("revision_count", 0),
+                "issues_to_fix": len(review.get("issues", [])),
+            })
+            logger.log_llm_call("Code revision addressing critic feedback", LLM_MODEL)
+        else:
+            logger.log_llm_call("Code generation with architecture alignment", LLM_MODEL)
 
         try:
             response = self.llm.invoke(messages)

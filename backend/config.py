@@ -14,9 +14,13 @@ MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
 
 # ── LLM Settings ─────────────────────────────────────────
-LLM_MODEL = "mistral-large-latest"
+LLM_MODEL = os.getenv("LLM_MODEL", "codestral-latest")
 LLM_TEMPERATURE = 0.3
 LLM_MAX_TOKENS = 8192
+
+# ── Multi-Agent Settings ─────────────────────────────────
+MAX_AGENT_STEPS = 5      # agents the supervisor may dispatch per query
+MAX_REVISIONS = 2        # critic → codegen rework rounds before giving up
 
 # ── Embedding Settings ───────────────────────────────────
 EMBEDDING_MODEL = "mistral-embed"
@@ -49,6 +53,13 @@ SKIP_DIRS = {
 # ── Graph Settings ────────────────────────────────────────
 NODE_TYPES = ["file", "class", "function", "module", "variable"]
 EDGE_TYPES = ["contains", "imports", "calls", "inherits", "uses"]
+
+# ── Persistence ──────────────────────────────────────────
+# Each ingested repo is saved under DATA_DIR/repos/<repo id>. On Modal this
+# points at a mounted Volume so repos survive container restarts.
+DATA_DIR = os.getenv("DATA_DIR", os.path.join(_TEMP_BASE, "data"))
+MODAL_VOLUME_NAME = os.getenv("MODAL_VOLUME_NAME", "")  # set on Modal to commit writes
+MAX_LOADED_REPOS = 6     # repos kept in memory at once; others reload from disk
 
 # ── FAISS Settings ────────────────────────────────────────
 FAISS_INDEX_DIR = os.path.join(_TEMP_BASE, "faiss_indices")

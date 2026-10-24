@@ -4,9 +4,10 @@ Creates detailed technical plans and component breakdowns before coding begins,
 helping developers think through complex changes systematically.
 """
 
-from langchain_mistralai import ChatMistralAI
-from config import MISTRAL_API_KEY, LLM_MODEL, LLM_TEMPERATURE, LLM_MAX_TOKENS
+from config import LLM_MODEL, LLM_TEMPERATURE
+from agents.llm import make_llm
 from explainability.logger import ExplainabilityLogger
+from agents.collaboration import format_prior_work
 
 
 class LLDAgent:
@@ -37,15 +38,13 @@ EXISTING ARCHITECTURE:
 
 RELEVANT CODE:
 {code_chunks}
+
+WORK FROM OTHER AGENTS (ground the plan in these findings):
+{prior_work}
 """
 
     def __init__(self):
-        self.llm = ChatMistralAI(
-            model=LLM_MODEL,
-            api_key=MISTRAL_API_KEY,
-            temperature=LLM_TEMPERATURE,
-            max_tokens=LLM_MAX_TOKENS,
-        )
+        self.llm = make_llm(LLM_TEMPERATURE)
 
     def run(self, state: dict) -> dict:
         """Execute the LLD planning agent."""
@@ -73,6 +72,7 @@ RELEVANT CODE:
         prompt = self.SYSTEM_PROMPT.format(
             graph_context=graph_context,
             code_chunks=code_chunks_text,
+            prior_work=format_prior_work(state),
         )
 
         logger.log_llm_call("Low-level design plan generation", LLM_MODEL)

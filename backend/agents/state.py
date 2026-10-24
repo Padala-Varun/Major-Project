@@ -26,6 +26,15 @@ class AgentState(TypedDict, total=False):
     code_blocks: list[dict]                 # Generated code blocks
     plan: Optional[dict]                    # LLD plan structure
 
+    # ── Collaboration (supervisor + critic loop) ──────────
+    agent_outputs: list[dict]               # Each agent run, in order, for later agents to build on
+    supervisor_decisions: list[dict]        # {"next", "reason"} per supervisor turn
+    next_agent: str                         # Supervisor's pick: qa | lld | codegen | pr | finish
+    step_count: int                         # Agents dispatched by the supervisor so far
+    review: Optional[dict]                  # Latest critic verdict: approved, score, issues, feedback
+    revision_count: int                     # Critic → codegen rework rounds used
+    started_at: float                       # Pipeline start (epoch seconds) for the merged timeline
+
     # ── Explainability ────────────────────────────────────
     explanation_log: dict                   # Full explainability trace
 

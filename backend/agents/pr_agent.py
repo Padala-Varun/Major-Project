@@ -5,9 +5,10 @@ traces dependencies, and highlights potential risks.
 """
 
 import requests
-from langchain_mistralai import ChatMistralAI
-from config import MISTRAL_API_KEY, GITHUB_TOKEN, LLM_MODEL, LLM_TEMPERATURE, LLM_MAX_TOKENS
+from config import GITHUB_TOKEN, LLM_MODEL, LLM_TEMPERATURE
+from agents.llm import make_llm
 from explainability.logger import ExplainabilityLogger
+from agents.collaboration import format_prior_work
 
 
 class PRAgent:
@@ -43,15 +44,13 @@ PULL REQUEST DIFF:
 
 PR METADATA:
 {pr_metadata}
+
+WORK FROM OTHER AGENTS:
+{prior_work}
 """
 
     def __init__(self):
-        self.llm = ChatMistralAI(
-            model=LLM_MODEL,
-            api_key=MISTRAL_API_KEY,
-            temperature=LLM_TEMPERATURE,
-            max_tokens=LLM_MAX_TOKENS,
-        )
+        self.llm = make_llm(LLM_TEMPERATURE)
 
     def run(self, state: dict) -> dict:
         """Execute the PR analysis agent."""
@@ -157,6 +156,7 @@ PR METADATA:
             code_chunks=code_chunks_text,
             pr_diff=pr_diff[:8000],  # Limit diff size
             pr_metadata=pr_metadata,
+            prior_work=format_prior_work(state),
         )
 
         logger.log_llm_call("PR impact analysis", LLM_MODEL)
