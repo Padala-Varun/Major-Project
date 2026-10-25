@@ -1,1 +1,1 @@
-"""Agents module for DevCopilot."""
+"""Agents module for Ariadne."""

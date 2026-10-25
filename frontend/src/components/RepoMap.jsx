@@ -4,7 +4,8 @@ import {
   ArrowLeft, CircleAlert, FlaskConical, LoaderCircle, Maximize, MessageSquare,
   PencilRuler, Search, ShieldCheck, TriangleAlert, X,
 } from 'lucide-react';
-import { getGraph } from '../services/api';
+import { getBrief, getGraph } from '../services/api';
+import Markdown from './Markdown';
 import { ImpactBadge } from './ImpactCard';
 
 // Categorical slots in fixed order, validated (dataviz validate_palette.js) against
@@ -110,6 +111,46 @@ function gravityForce(strength = 0.04) {
   return force;
 }
 
+/** One-page onboarding brief, written by the team from the map and README (cached server-side). */
+function BriefPanel({ repoId }) {
+  const [brief, setBrief] = useState({ status: 'loading', markdown: '', error: null });
+
+  const load = useCallback((refresh = false) => {
+    setBrief({ status: 'loading', markdown: '', error: null });
+    getBrief(repoId, refresh)
+      .then((b) => setBrief({ status: 'ready', markdown: b.markdown, error: null }))
+      .catch((err) => setBrief({ status: 'error', markdown: '', error: err.response?.data?.detail || err.message }));
+  }, [repoId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (brief.status === 'loading') {
+    return (
+      <div className="brief-loading">
+        <LoaderCircle size={16} className="spin" />
+        <div>
+          <div className="shimmer">Writing the onboarding brief…</div>
+          <div className="muted">The Explorer reads the map and README. This takes a few seconds the first time.</div>
+        </div>
+      </div>
+    );
+  }
+  if (brief.status === 'error') {
+    return (
+      <>
+        <div className="callout danger"><TriangleAlert size={15} /><span>{brief.error}</span></div>
+        <button className="btn btn-outline btn-sm" style={{ marginTop: 10 }} onClick={() => load()}>Try again</button>
+      </>
+    );
+  }
+  return (
+    <div className="brief">
+      <Markdown>{brief.markdown}</Markdown>
+      <button className="btn btn-ghost btn-sm" style={{ marginTop: 12 }} onClick={() => load(true)}>Regenerate</button>
+    </div>
+  );
+}
+
 function RiskBar({ value }) {
   return (
     <div className="risk-bar" title={`Risk ${value}/100`}>
@@ -135,7 +176,7 @@ export default function RepoMap({ repoId, theme, onAsk, impact, onClearImpact })
   const [hovered, setHovered] = useState(null);
   const [isolated, setIsolated] = useState(null);
   const [search, setSearch] = useState('');
-  const [tab, setTab] = useState('overview');
+  const [tab, setTab] = useState('brief');
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [mouse, setMouse] = useState({ x: 0, y: 0 });
   const wrapRef = useRef(null);
@@ -505,13 +546,17 @@ export default function RepoMap({ repoId, theme, onAsk, impact, onClearImpact })
         ) : (
           <>
             <div className="tabs">
-              {[['overview', 'Overview'], ['files', 'Files']].map(([id, label]) => (
+              {[['brief', 'Brief'], ['overview', 'Overview'], ['files', 'Files']].map(([id, label]) => (
                 <button key={id} className={`tab ${tab === id ? 'active' : ''}`} onClick={() => setTab(id)}>
                   {label}{id === 'files' && <span className="count">{stats.files}</span>}
                 </button>
               ))}
             </div>
-            {tab === 'overview' ? (
+            {tab === 'brief' ? (
+              <div className="panel-body">
+                <BriefPanel repoId={repoId} />
+              </div>
+            ) : tab === 'overview' ? (
               <div className="panel-body">
                 <div className="map-stats">
                   {[['Files', stats.files], ['Dependencies', stats.dependencies], ['Classes', stats.classes], ['Functions', stats.functions]].map(([l, v]) => (

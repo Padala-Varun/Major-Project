@@ -1,6 +1,6 @@
 """
 FastAPI API Routes
-REST endpoints for DevCopilot: ingestion, querying, status, and graph stats.
+REST endpoints for Ariadne: ingestion, querying, status, and graph stats.
 Every repository has its own session (see workspace.py); requests name the
 repo they target with a `repo` id, falling back to the last one ingested.
 """
@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from typing import Optional
 import json
 import threading
+import time
 import traceback
 
 import workspace
@@ -31,6 +32,7 @@ class ChatTurn(BaseModel):
 class QueryRequest(BaseModel):
     query: str = Field(..., description="User query")
     history: list[ChatTurn] = Field(default_factory=list, description="Earlier turns, oldest first")
+    require_code: bool = Field(False, description="The team must produce code (used by Fix issue)")
     repo: Optional[str] = Field(None, description="Repo id from /ingest (defaults to the last one)")
     agent_type: Optional[str] = Field(None, description="Force agent: qa, codegen, lld, pr")
     repo_url: Optional[str] = Field(None, description="Repo URL for PR analysis")
@@ -245,6 +247,7 @@ def query_repository(req: QueryRequest):
         repo_url=req.repo_url or session.meta["repo_url"],
         pr_number=req.pr_number,
         chat_history=[t.model_dump() for t in req.history],
+        require_code=req.require_code,
     )
 
     return QueryResponse(
@@ -273,6 +276,7 @@ def query_repository_stream(req: QueryRequest):
         repo_url=req.repo_url or session.meta["repo_url"],
         pr_number=req.pr_number,
         chat_history=[t.model_dump() for t in req.history],
+        require_code=req.require_code,
     )
     sse = (f"data: {json.dumps(event, default=str)}\n\n" for event in events)
     return StreamingResponse(sse, media_type="text/event-stream",
@@ -319,6 +323,106 @@ def get_graph_map(repo: Optional[str] = None):
     return session.map_cache
 
 
+# ── Onboarding Brief ──────────────────────────────────────
+
+@router.get("/brief")
+def get_brief(repo: Optional[str] = None, refresh: bool = False):
+    """One-page onboarding brief for the repo, generated once and cached."""
+    from brief import clean_brief, generate_brief
+
+    session = _session_or_404(repo)
+    cached = None if refresh else workspace.read_extra(session.id, "brief")
+    if cached:
+        return {**cached, "markdown": clean_brief(cached["markdown"])}
+    try:
+        markdown = generate_brief(session.meta["repo_name"], get_graph_map(session.id), session.faiss_store)
+    except Exception as e:
+        from agents.orchestrator import friendly_error
+        raise HTTPException(status_code=502, detail=friendly_error(str(e)))
+    brief = {"markdown": markdown, "generated_at": time.time()}
+    workspace.write_extra(session.id, "brief", brief)
+    return brief
+
+
+# ── Fix flow: issues, change preparation, verification ────
+
+@router.get("/issue")
+def get_issue(ref: str, repo: Optional[str] = None, github_token: Optional[str] = None):
+    """A GitHub issue (URL or #number) and the task the agent team should work from."""
+    from api.github_issues import parse_issue_ref, fetch_issue, issue_task
+
+    session = _session_or_404(repo)
+    parsed = parse_issue_ref(ref, session.meta["repo_url"])
+    if not parsed:
+        raise HTTPException(status_code=400, detail="Paste a GitHub issue link or an issue number like #42.")
+    owner, name, number = parsed
+    connected = session.meta["repo_url"].rstrip("/").removesuffix(".git").split("/")[-2:]
+    if [owner.lower(), name.lower()] != [p.lower() for p in connected]:
+        raise HTTPException(status_code=400,
+                            detail=f"That issue belongs to {owner}/{name}. Connect that repository to fix it.")
+    issue = fetch_issue(owner, name, number, github_token)
+    if issue.get("error"):
+        raise HTTPException(status_code=400, detail=issue["error"])
+    return {**issue, "task": issue_task(issue)}
+
+
+class CodeBlockItem(BaseModel):
+    code: str
+    language: Optional[str] = "text"
+    filename: Optional[str] = None
+
+class PrepareRequest(BaseModel):
+    repo: Optional[str] = None
+    code_blocks: list[CodeBlockItem]
+    task: str = ""
+    github_token: Optional[str] = None
+    base_files: list[dict] = Field(default_factory=list, description="Earlier change set to build on")
+
+
+@router.post("/changes/prepare")
+def prepare_change_files(req: PrepareRequest):
+    """Complete file contents and diffs for generated code (fragments are merged into existing files)."""
+    from changes import prepare_changes
+    from config import GITHUB_TOKEN
+
+    session = _session_or_404(req.repo)
+    try:
+        files = prepare_changes(
+            session.meta["repo_url"], [b.model_dump() for b in req.code_blocks], req.task,
+            token=req.github_token or GITHUB_TOKEN, ref=session.meta.get("default_branch"),
+            base_files=req.base_files,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Couldn't prepare the changes: {e}")
+    return {"files": files}
+
+
+class VerifyFile(BaseModel):
+    path: str
+    content: str
+
+class VerifyRequest(BaseModel):
+    repo: Optional[str] = None
+    files: list[VerifyFile]
+    preview: bool = False
+    github_token: Optional[str] = None
+
+
+@router.post("/verify")
+def verify_change(req: VerifyRequest):
+    """Run the repo's tests on the change in an isolated sandbox (optionally serve a preview).
+    Streams Server-Sent Events; the last has type "done" with the verdict."""
+    from sandbox import Verifier
+    from config import GITHUB_TOKEN
+
+    session = _session_or_404(req.repo)
+    verifier = Verifier(session.meta["repo_url"], req.github_token or GITHUB_TOKEN, req.preview)
+    events = verifier.verify([f.model_dump() for f in req.files])
+    sse = (f"data: {json.dumps(event, default=str)}\n\n" for event in events)
+    return StreamingResponse(sse, media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 # ── Graph Stats Endpoint ─────────────────────────────────
 
 @router.get("/graph-stats")
@@ -351,8 +455,8 @@ class CreatePRRequest(BaseModel):
     github_token: Optional[str] = Field(None, description="GitHub access token")
     files: list[PRFileItem] = Field(..., description="Files to commit")
     branch_name: Optional[str] = Field(None, description="Branch name (auto-generated if empty)")
-    commit_message: str = Field("Add code generated by DevCopilot", description="Commit message")
-    pr_title: str = Field("DevCopilot: Generated Code", description="PR title")
+    commit_message: str = Field("Add code generated by Ariadne", description="Commit message")
+    pr_title: str = Field("Ariadne: Generated Code", description="PR title")
     pr_body: Optional[str] = Field(None, description="PR description")
 
 

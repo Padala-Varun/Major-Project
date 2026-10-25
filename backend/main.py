@@ -1,6 +1,6 @@
 """
-DevCopilot Backend — FastAPI Application
-Main entry point for the DevCopilot API server.
+Ariadne Backend — FastAPI Application
+Main entry point for the Ariadne API server.
 """
 
 import sys
@@ -17,7 +17,7 @@ from api.routes import router
 # ── FastAPI App ───────────────────────────────────────────
 
 app = FastAPI(
-    title="DevCopilot API",
+    title="Ariadne API",
     description="AI-Powered Multi-Agent Codebase Assistant — "
                 "Graph-based RAG with LangGraph orchestration",
     version="1.0.0",
@@ -42,7 +42,7 @@ app.include_router(router, prefix="/api")
 @app.get("/")
 async def root():
     return {
-        "name": "DevCopilot API",
+        "name": "Ariadne API",
         "version": "1.0.0",
         "status": "running",
         "docs": "/docs",

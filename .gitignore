@@ -26,7 +26,7 @@ backend/.env
 *.swp
 *.swo
 
-# DevCopilot runtime
+# Ariadne runtime
 backend/temp_repos/
 backend/faiss_indices/
 

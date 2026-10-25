@@ -1,4 +1,4 @@
-"""Vector store module for DevCopilot."""
+"""Vector store module for Ariadne."""
 from .embedder import Embedder
 from .faiss_store import FAISSStore
 

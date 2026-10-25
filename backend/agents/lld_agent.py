@@ -13,7 +13,7 @@ from agents.collaboration import format_prior_work, history_messages
 class LLDAgent:
     """Creates detailed low-level design plans for code changes."""
 
-    SYSTEM_PROMPT = """You are DevCopilot's Low-Level Design Planning Agent — an expert software architect.
+    SYSTEM_PROMPT = """You are Ariadne's Low-Level Design Planning Agent — an expert software architect.
 You create detailed technical plans and component breakdowns for implementing changes
 in an existing software repository.
 

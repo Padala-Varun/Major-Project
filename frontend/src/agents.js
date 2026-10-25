@@ -15,6 +15,7 @@ export const TEAM_ORDER = ['supervisor', 'qa', 'lld', 'codegen', 'critic', 'pr']
 /** Composer modes. `agent: null` lets the supervisor assemble the team. */
 export const MODES = [
   { id: 'auto', agent: null, label: 'Team', hint: 'Supervisor picks the agents' },
+  { id: 'fix', agent: null, label: 'Fix issue', hint: 'The team fixes a GitHub issue end to end' },
   { id: 'qa', agent: 'qa', label: 'Ask', hint: 'Explorer only' },
   { id: 'lld', agent: 'lld', label: 'Plan', hint: 'Architect only' },
   { id: 'codegen', agent: 'codegen', label: 'Code', hint: 'Engineer + Critic' },

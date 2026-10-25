@@ -1,5 +1,5 @@
 """
-Deploy DevCopilot backend to Modal.
+Deploy Ariadne backend to Modal.
 
 Usage (from backend/):
     modal deploy modal_deploy.py
@@ -7,6 +7,8 @@ Usage (from backend/):
 
 import modal
 
+# Infrastructure names predate the rename to Ariadne. Changing APP_NAME changes the
+# deployed URL (and frontend/.env.*); changing VOLUME_NAME starts with empty storage.
 APP_NAME = "devcopilot-backend"
 SECRET_NAME = "devcopilot-secrets"
 VOLUME_NAME = "devcopilot-data"

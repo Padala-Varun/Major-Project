@@ -172,6 +172,21 @@ def get_session(repo_id: str) -> RepoSession | None:
     return session
 
 
+def read_extra(repo_id: str, name: str) -> dict | None:
+    """A cached artifact saved next to the repo (e.g. its onboarding brief)."""
+    path = os.path.join(_repo_dir(repo_id), f"{name}.json")
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def write_extra(repo_id: str, name: str, data: dict):
+    with open(os.path.join(_repo_dir(repo_id), f"{name}.json"), "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    _commit_volume()
+
+
 def list_repos() -> list[dict]:
     """Saved repositories, most recently ingested first."""
     repos = []

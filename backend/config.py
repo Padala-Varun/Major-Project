@@ -1,5 +1,5 @@
 """
-DevCopilot Configuration
+Ariadne Configuration
 Central configuration for models, embeddings, chunking, and graph settings.
 """
 

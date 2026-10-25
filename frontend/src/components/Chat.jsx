@@ -1,15 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  ArrowUp, Braces, CircleCheck, Compass, GitPullRequest, Network, PencilRuler,
-  ScrollText, TriangleAlert,
+  ArrowUp, Braces, CircleCheck, CircleDot, Compass, ExternalLink, GitPullRequest, Network,
+  PencilRuler, ScrollText, TriangleAlert,
 } from 'lucide-react';
-import { streamQuery } from '../services/api';
+import { getIssue, streamQuery } from '../services/api';
 import { AGENTS } from '../agents';
 import { BRAND } from '../brand';
 import AgentRun from './AgentRun';
 import Markdown from './Markdown';
 import TracePanel from './TracePanel';
-import CreatePRModal from './CreatePRModal';
+import CreatePRModal, { filesFromBlocks } from './CreatePRModal';
+import ChangeReview from './ChangeReview';
 import ImpactCard from './ImpactCard';
 import { AgentIcon, BrandMark, CopyButton } from './ui';
 
@@ -41,6 +42,24 @@ function CriticSummary({ critic, revisions }) {
   );
 }
 
+function IssueCard({ issue }) {
+  return (
+    <div className="issue-card">
+      <div className="issue-top">
+        <CircleDot size={15} className={issue.state === 'closed' ? 'issue-closed' : 'issue-open'} />
+        <span className="issue-title">{issue.title}</span>
+        <a href={issue.url} target="_blank" rel="noopener noreferrer" className="issue-link">
+          #{issue.number} <ExternalLink size={12} />
+        </a>
+      </div>
+      {issue.labels.length > 0 && (
+        <div className="map-chips">{issue.labels.map((l) => <span key={l} className="chip">{l}</span>)}</div>
+      )}
+      {issue.body && <p className="issue-body">{issue.body.slice(0, 280)}{issue.body.length > 280 ? '…' : ''}</p>}
+    </div>
+  );
+}
+
 /** The answer a finished message shows: the last non-critic agent's output. */
 function answerOf(msg) {
   const workers = msg.steps.filter((s) => s.agent !== 'critic');
@@ -49,7 +68,7 @@ function answerOf(msg) {
 
 const HISTORY_TURNS = 6;
 
-function AssistantMessage({ msg, query, onTrace, onCreatePR, onShowImpact }) {
+function AssistantMessage({ msg, request, repo, githubToken, onTrace, onCreatePR, onShowImpact, onAsk }) {
   const running = msg.status === 'running';
   const steps = msg.steps;
   const critic = [...steps].reverse().find((s) => s.agent === 'critic');
@@ -58,7 +77,10 @@ function AssistantMessage({ msg, query, onTrace, onCreatePR, onShowImpact }) {
   const showRun = running || steps.length > 1;
   const log = msg.result?.explanation_log;
   const codeBlocks = msg.result?.code_blocks || [];
+  const named = codeBlocks.some((b) => b.filename);
   const singleAgent = !showRun && steps.length === 1 ? steps[0].agent : null;
+  const label = request?.issue ? `Fix #${request.issue.number}: ${request.issue.title}` : request?.content;
+  const prContext = { title: request?.content, issue: request?.issue, impact, critic };
 
   return (
     <div className="msg msg-ai">
@@ -95,7 +117,18 @@ function AssistantMessage({ msg, query, onTrace, onCreatePR, onShowImpact }) {
           <>
             <Markdown>{answer || 'No response was generated.'}</Markdown>
             <CriticSummary critic={critic} revisions={log?.revision_count} />
-            {impact && <ImpactCard impact={impact} onShowOnMap={() => onShowImpact(impact, query)} />}
+            {impact && <ImpactCard impact={impact} onShowOnMap={() => onShowImpact(impact, label)} />}
+            {named && (
+              <ChangeReview
+                codeBlocks={codeBlocks}
+                task={request?.content || ''}
+                repo={repo}
+                githubToken={githubToken}
+                baseFiles={request?.baseFiles}
+                onOpenPR={(files, verification) => onCreatePR({ ...prContext, files, verification })}
+                onAsk={onAsk}
+              />
+            )}
             <div className="msg-actions">
               <CopyButton text={answer || ''} label="Copy" />
               {log && Object.keys(log).length > 0 && (
@@ -103,8 +136,8 @@ function AssistantMessage({ msg, query, onTrace, onCreatePR, onShowImpact }) {
                   <ScrollText size={14} /> Reasoning trace
                 </button>
               )}
-              {codeBlocks.length > 0 && (
-                <button className="btn btn-outline btn-sm" onClick={() => onCreatePR({ codeBlocks, title: query, impact, critic })}>
+              {codeBlocks.length > 0 && !named && (
+                <button className="btn btn-outline btn-sm" onClick={() => onCreatePR({ ...prContext, files: filesFromBlocks(codeBlocks) })}>
                   <GitPullRequest size={14} /> Open pull request
                 </button>
               )}
@@ -139,9 +172,11 @@ export default function Chat({
     el.style.height = `${el.scrollHeight}px`;
   }, [input]);
 
-  const send = async (text) => {
-    const query = (text ?? input).trim();
-    if (!query || busy) return;
+  // extra.baseFiles: a previous change set this request's code builds on (sandbox fix loop)
+  const send = async (text, forceMode = null, extra = {}) => {
+    const typed = (text ?? input).trim();
+    const activeMode = forceMode || mode;
+    if (!typed || busy) return;
 
     // Earlier turns so follow-ups ("now add tests for that") have context
     const history = messages.flatMap((m) => {
@@ -150,15 +185,31 @@ export default function Chat({
     }).slice(-HISTORY_TURNS);
 
     const id = Date.now();
-    setMessages((prev) => [
-      ...prev,
-      { role: 'user', content: query, mode: mode.id === 'auto' ? null : mode.label },
-      { id, role: 'ai', status: 'running', steps: [], working: null, result: null, startedAt: Date.now() },
-    ]);
     setInput('');
     setBusy(true);
-
     const update = (fn) => setMessages((prev) => prev.map((m) => (m.id === id ? fn(m) : m)));
+
+    // Fix mode: fetch the issue first; the team works from its title, body and discussion
+    let query = typed;
+    let issue = null;
+    if (activeMode.id === 'fix') {
+      setMessages((prev) => [...prev,
+        { role: 'user', content: typed, mode: activeMode.label },
+        { id, role: 'ai', status: 'running', steps: [], working: null, result: null, startedAt: Date.now() }]);
+      try {
+        issue = await getIssue(repo, typed, githubToken || null);
+        query = issue.task;
+        setMessages((prev) => prev.map((m, i) => (i === prev.length - 2 ? { ...m, content: query, issue } : m)));
+      } catch (err) {
+        update((m) => ({ ...m, status: 'error', error: err.response?.data?.detail || err.message }));
+        setBusy(false);
+        return;
+      }
+    } else {
+      setMessages((prev) => [...prev,
+        { role: 'user', content: query, mode: activeMode.id === 'auto' ? null : activeMode.label, baseFiles: extra.baseFiles },
+        { id, role: 'ai', status: 'running', steps: [], working: null, result: null, startedAt: Date.now() }]);
+    }
 
     try {
       await streamQuery(
@@ -166,9 +217,10 @@ export default function Chat({
           query,
           history,
           repo,
-          agentType: mode.agent,
+          agentType: activeMode.agent,
+          requireCode: activeMode.id === 'fix',
           repoUrl,
-          prNumber: mode.id === 'pr' ? Number(prNumber) || null : null,
+          prNumber: activeMode.id === 'pr' ? Number(prNumber) || null : null,
         },
         (ev) => {
           if (ev.type === 'working') {
@@ -216,6 +268,11 @@ export default function Chat({
     }
   };
 
+  const placeholder = {
+    pr: 'What should the Reviewer look for?',
+    fix: 'Paste a GitHub issue link, or an issue number like #42',
+  }[mode.id] || 'Ask the team anything about this codebase…';
+
   return (
     <div className={`chat ${hidden ? 'hidden' : ''}`}>
       <div className="chat-scroll">
@@ -223,7 +280,7 @@ export default function Chat({
           {messages.length === 0 ? (
             <div className="welcome">
               <h2>What should the team work on?</h2>
-              <p>Ask a question, request a design, or have the agents write and review code.</p>
+              <p>Ask a question, request a design, fix a GitHub issue, or have the agents write and review code.</p>
               <div className="suggestions">
                 {SUGGESTIONS.map(({ icon: Icon, title, text }) => (
                   <button key={title} className="suggestion" onClick={() => send(text)}>
@@ -239,17 +296,22 @@ export default function Chat({
           ) : (
             messages.map((msg, i) => (msg.role === 'user' ? (
               <div className="msg" key={i}>
-                <div className="msg-user"><div className="bubble">{msg.content}</div></div>
+                {msg.issue
+                  ? <div className="msg-user"><IssueCard issue={msg.issue} /></div>
+                  : <div className="msg-user"><div className="bubble">{msg.content}</div></div>}
                 {msg.mode && <div className="msg-user msg-meta">{msg.mode} mode</div>}
               </div>
             ) : (
               <AssistantMessage
                 key={msg.id}
                 msg={msg}
-                query={messages[i - 1]?.content}
+                request={messages[i - 1]}
+                repo={repo}
+                githubToken={githubToken}
                 onTrace={setTrace}
                 onCreatePR={setPrDraft}
                 onShowImpact={onShowImpact}
+                onAsk={(text, extra) => send(text, { id: 'codegen', agent: 'codegen', label: 'Code' }, extra)}
               />
             )))
           )}
@@ -266,7 +328,7 @@ export default function Chat({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder={mode.id === 'pr' ? 'What should the Reviewer look for?' : 'Ask the team anything about this codebase…'}
+            placeholder={placeholder}
             aria-label="Message"
           />
           <div className="composer-foot">
@@ -295,10 +357,12 @@ export default function Chat({
       {trace && <TracePanel log={trace} onClose={() => setTrace(null)} />}
       {prDraft && (
         <CreatePRModal
-          codeBlocks={prDraft.codeBlocks}
+          files={prDraft.files}
           title={prDraft.title}
+          issue={prDraft.issue}
           impact={prDraft.impact}
           critic={prDraft.critic}
+          verification={prDraft.verification}
           repoUrl={repoUrl}
           githubToken={githubToken}
           onClose={() => setPrDraft(null)}

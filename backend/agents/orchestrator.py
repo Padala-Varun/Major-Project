@@ -169,6 +169,9 @@ Critic, Reviewer), never by id."""
                 # Every request deserves at least one agent
                 next_agent = self._heuristic_route(state.get("query", ""))
                 reason = "Supervisor tried to finish before any work; using heuristic routing."
+            if next_agent == "finish" and state.get("require_code") and "codegen" not in already_ran:
+                # Fixing an issue isn't done until there is code to ship
+                next_agent, reason = "codegen", "The fix needs code, so the Engineer implements it now."
 
         decision = {
             "next": next_agent,
@@ -441,7 +444,7 @@ Critic, Reviewer), never by id."""
 
     def process_query(self, query: str, agent_type: str = None,
                       repo_url: str = None, pr_number: int = None,
-                      chat_history: list[dict] = None) -> dict:
+                      chat_history: list[dict] = None, require_code: bool = False) -> dict:
         """
         Process a user query through the multi-agent pipeline.
 
@@ -456,7 +459,7 @@ Critic, Reviewer), never by id."""
         """
         try:
             final = self.workflow.invoke(
-                self._initial_state(query, agent_type, repo_url, pr_number, chat_history),
+                self._initial_state(query, agent_type, repo_url, pr_number, chat_history, require_code),
                 config={"recursion_limit": 50},
             )
             return self._result(final)
@@ -465,7 +468,7 @@ Critic, Reviewer), never by id."""
 
     def stream_query(self, query: str, agent_type: str = None,
                      repo_url: str = None, pr_number: int = None,
-                     chat_history: list[dict] = None):
+                     chat_history: list[dict] = None, require_code: bool = False):
         """Same pipeline as process_query, yielding progress events as agents work.
 
         Events (dicts with a "type" key):
@@ -479,7 +482,7 @@ Critic, Reviewer), never by id."""
         seen_decisions = seen_outputs = 0
         try:
             for state in self.workflow.stream(
-                self._initial_state(query, agent_type, repo_url, pr_number, chat_history),
+                self._initial_state(query, agent_type, repo_url, pr_number, chat_history, require_code),
                 config={"recursion_limit": 50},
                 stream_mode="values",
             ):
@@ -558,13 +561,14 @@ Critic, Reviewer), never by id."""
 
     def _initial_state(self, query: str, agent_type: str = None,
                        repo_url: str = None, pr_number: int = None,
-                       chat_history: list[dict] = None) -> AgentState:
+                       chat_history: list[dict] = None, require_code: bool = False) -> AgentState:
         return {
             "query": query,
             "agent_type": agent_type,
             "repo_url": repo_url,
             "pr_number": pr_number,
             "chat_history": chat_history or [],
+            "require_code": require_code,
             "retrieved_chunks": [],
             "graph_context": "",
             "graph_nodes": [],

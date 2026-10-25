@@ -1,1 +1,1 @@
-"""API routes module for DevCopilot."""
+"""API routes module for Ariadne."""

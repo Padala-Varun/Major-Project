@@ -15,6 +15,7 @@ class AgentState(TypedDict, total=False):
     repo_url: Optional[str]                 # For PR analysis
     pr_number: Optional[int]                # For PR analysis
     chat_history: list[dict]                # Earlier turns: {"role": "user"|"assistant", "content"}
+    require_code: bool                      # The run must end with the Engineer's code (Fix issue)
 
     # ── Context (populated by retrieval) ──────────────────
     retrieved_chunks: list[dict]            # FAISS search results
