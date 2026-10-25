@@ -135,33 +135,66 @@ class Verifier:
                 problems.append(f"{f['path']}: {out.strip()[-500:]}")
         return problems
 
+    def find_web_app(self) -> dict | None:
+        """A web front end in a subfolder (frontend/, web/, client/...), for repos
+        whose root is a backend: a buildable package.json first, then static HTML."""
+        prune = r"\( -name node_modules -o -name .git -o -name .venv -o -name venv -o -name dist -o -name build \) -prune"
+        _, out = self.run(f"find . -maxdepth 3 {prune} -o -name package.json -print | sort", timeout=30)
+        for path in out.split():
+            app_dir = path.rsplit("/", 1)[0]
+            _, pkg = self.run(f"cat {shlex.quote(path)}", timeout=30)
+            if '"build"' in pkg or '"next"' in pkg:
+                return {"kind": "node", "dir": f"{REPO_DIR}/{app_dir.lstrip('./')}".rstrip("/"), "pkg": pkg}
+
+        _, out = self.run(f"find . -maxdepth 3 {prune} -o -name '*.html' -print | sort", timeout=30)
+        pages = [p.lstrip("./") for p in out.split()]
+        if not pages:
+            return None
+        # Serve the folder holding the pages so their relative links (../css/...) work
+        index = next((p for p in pages if p.endswith("/index.html") or p == "index.html"), pages[0])
+        folder = index.rsplit("/", 1)[0] if "/" in index else ""
+        return {"kind": "static", "dir": f"{REPO_DIR}/{folder}".rstrip("/"), "entry": index.rsplit("/", 1)[-1]}
+
     def start_preview(self, project: dict) -> str | None:
-        pkg = project["pkg"]
-        if project["kind"] == "static":
-            serve = f"python -m http.server {PREVIEW_PORT} --directory {REPO_DIR}"
-        elif project["kind"] == "node" and '"next"' in pkg:
-            code, _ = self.run("npx next build", timeout=INSTALL_TIMEOUT)
+        app = {"kind": project["kind"], "dir": REPO_DIR, "pkg": project["pkg"]}
+        if app["kind"] not in ("node", "static") or (app["kind"] == "node" and '"build"' not in app["pkg"]
+                                                    and '"next"' not in app["pkg"]):
+            app = self.find_web_app()
+            if not app:
+                return None
+            if app["kind"] == "node":
+                code, _ = self.run(NODE_INSTALL, timeout=INSTALL_TIMEOUT, workdir=app["dir"])
+                if code != 0:
+                    return None
+
+        app_dir, pkg, entry = app["dir"], app.get("pkg", ""), app.get("entry", "")
+        if app["kind"] == "static":
+            serve = f"python -m http.server {PREVIEW_PORT} --directory {app_dir}"
+        elif '"next"' in pkg:
+            code, _ = self.run("npx next build", timeout=INSTALL_TIMEOUT, workdir=app_dir)
             if code != 0:
                 return None
             serve = f"npx next start -H 0.0.0.0 -p {PREVIEW_PORT}"
-        elif project["kind"] == "node" and '"build"' in pkg:
+        else:
             # Serve the production build: dev servers reject the tunnel's hostname
-            code, _ = self.run("npm run build", timeout=INSTALL_TIMEOUT)
+            code, _ = self.run("npm run build", timeout=INSTALL_TIMEOUT, workdir=app_dir)
             if code != 0:
                 return None
-            _, out_dir = self.run("for d in dist build out public; do [ -f $d/index.html ] && echo $d && break; done")
+            _, out_dir = self.run("for d in dist build out public; do [ -f $d/index.html ] && echo $d && break; done",
+                                  workdir=app_dir)
             if not out_dir.strip():
                 return None
-            serve = f"python -m http.server {PREVIEW_PORT} --directory {REPO_DIR}/{out_dir.strip()}"
-        else:
-            return None
+            serve = f"python -m http.server {PREVIEW_PORT} --directory {app_dir}/{out_dir.strip()}"
 
-        self.sb.exec("bash", "-lc", f"{serve} > /tmp/preview.log 2>&1", workdir=REPO_DIR)
+        self.sb.exec("bash", "-lc", f"{serve} > /tmp/preview.log 2>&1", workdir=app_dir)
         code, _ = self.run(
             f"for i in $(seq 1 60); do curl -s -o /dev/null http://localhost:{PREVIEW_PORT} && exit 0; sleep 1; done; exit 1",
             timeout=80,
         )
-        return self.sb.tunnels()[PREVIEW_PORT].url if code == 0 else None
+        if code != 0:
+            return None
+        url = self.sb.tunnels()[PREVIEW_PORT].url
+        return f"{url}/{entry}" if entry and entry != "index.html" else url
 
     # ── pipeline ───────────────────────────────────────────
     def verify(self, files: list[dict]):
