@@ -1,1 +1,1 @@
-"""API routes module for Ariadne."""
+"""API routes module for ShipSafe."""

@@ -1,6 +1,6 @@
 """
-Ariadne Backend — FastAPI Application
-Main entry point for the Ariadne API server.
+ShipSafe Backend — FastAPI Application
+Main entry point for the ShipSafe API server.
 """
 
 import sys
@@ -17,7 +17,7 @@ from api.routes import router
 # ── FastAPI App ───────────────────────────────────────────
 
 app = FastAPI(
-    title="Ariadne API",
+    title="ShipSafe API",
     description="AI-Powered Multi-Agent Codebase Assistant — "
                 "Graph-based RAG with LangGraph orchestration",
     version="1.0.0",
@@ -42,7 +42,7 @@ app.include_router(router, prefix="/api")
 @app.get("/")
 async def root():
     return {
-        "name": "Ariadne API",
+        "name": "ShipSafe API",
         "version": "1.0.0",
         "status": "running",
         "docs": "/docs",

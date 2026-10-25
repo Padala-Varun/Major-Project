@@ -13,7 +13,7 @@ from agents.collaboration import format_prior_work, history_messages
 class QAAgent:
     """Answers questions about the codebase using graph + vector context."""
 
-    SYSTEM_PROMPT = """You are Ariadne's Q&A Agent — an expert code analyst.
+    SYSTEM_PROMPT = """You are ShipSafe's Q&A Agent — an expert code analyst.
 You answer technical and architectural questions about a software repository.
 
 RULES:

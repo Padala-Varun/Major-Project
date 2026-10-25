@@ -1,1 +1,1 @@
-"""Agents module for Ariadne."""
+"""Agents module for ShipSafe."""

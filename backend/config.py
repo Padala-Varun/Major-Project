@@ -1,5 +1,5 @@
 """
-Ariadne Configuration
+ShipSafe Configuration
 Central configuration for models, embeddings, chunking, and graph settings.
 """
 

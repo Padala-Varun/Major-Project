@@ -14,7 +14,7 @@ from agents.collaboration import format_prior_work, history_messages
 class PRAgent:
     """Analyzes pull requests for impact, risks, and quality."""
 
-    SYSTEM_PROMPT = """You are Ariadne's Pull Request Analysis Agent — an expert code reviewer.
+    SYSTEM_PROMPT = """You are ShipSafe's Pull Request Analysis Agent — an expert code reviewer.
 You analyze pull request changes to help developers understand impact, quality, and risks.
 
 RULES:

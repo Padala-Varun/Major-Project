@@ -16,7 +16,7 @@ from knowledge_graph.impact import format_impact
 class CriticAgent:
     """Gatekeeper that reviews Code Gen output before it reaches the user."""
 
-    SYSTEM_PROMPT = """You are Ariadne's Critic Agent — a strict senior code reviewer.
+    SYSTEM_PROMPT = """You are ShipSafe's Critic Agent — a strict senior code reviewer.
 You review code written by another AI agent for an existing repository.
 
 CHECK FOR:

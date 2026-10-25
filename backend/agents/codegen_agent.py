@@ -38,7 +38,7 @@ def _as_path(token: str) -> str | None:
 class CodeGenAgent:
     """Generates code that fits the existing codebase patterns."""
 
-    SYSTEM_PROMPT = """You are Ariadne's Code Generation Agent — an expert code architect.
+    SYSTEM_PROMPT = """You are ShipSafe's Code Generation Agent — an expert code architect.
 You generate new code that seamlessly integrates with an existing software repository.
 
 RULES:

@@ -1,6 +1,6 @@
-# Ariadne
+# ShipSafe
 
-**The thread through any codebase.** Ariadne is a team of AI agents that takes over an unfamiliar repository: it maps the architecture, answers questions, fixes GitHub issues, checks what a change affects, proves the fix with the repository's own tests in a sandbox, and opens the pull request.
+**Fix it. Prove it. Ship it.** ShipSafe is a team of AI agents that takes over an unfamiliar repository: it maps the architecture, answers questions, fixes GitHub issues, checks what a change affects, proves the fix with the repository's own tests in a sandbox, and opens the pull request.
 
 ![Python](https://img.shields.io/badge/Python-3.11-blue)
 ![React](https://img.shields.io/badge/React-18-61dafb)
@@ -15,13 +15,13 @@
 
 When a team inherits a codebase, the first weeks go to reading code nobody documented, guessing which files are risky to touch, and hoping a change doesn't break something three modules away. Code assistants help write code, but they don't know the repository's structure, can't say what a change will break, and can't prove their code works.
 
-Ariadne works from a **knowledge graph** of the repository (every file, class, function and import) plus semantic search, and it checks its own work twice: a Critic agent reviews every change, and a sandbox runs the project's real test suite before anything is merged.
+ShipSafe works from a **knowledge graph** of the repository (every file, class, function and import) plus semantic search, and it checks its own work twice: a Critic agent reviews every change, and a sandbox runs the project's real test suite before anything is merged.
 
 ## What it does
 
 | Stage | What happens |
 |---|---|
-| **Understand** | Paste a GitHub link. Ariadne indexes the repo and shows an interactive architecture map (modules, entry points, risk hotspots) next to a one-page onboarding brief. |
+| **Understand** | Paste a GitHub link. ShipSafe indexes the repo and shows an interactive architecture map (modules, entry points, risk hotspots) next to a one-page onboarding brief. |
 | **Ask** | A supervisor agent assembles the right specialists for each request; you watch them work live. Follow-up questions keep the conversation's context. |
 | **Fix** | Paste a GitHub issue. The team investigates, plans, writes the fix and tests, and the Critic reviews it, sending it back for revision when needed. |
 | **Protect** | Before you ship, impact analysis walks the import graph to show every file that depends on the change, with a Low/Medium/High rating and reasons, highlighted on the map. |
