@@ -136,6 +136,15 @@ function AssistantMessage({ msg, request, repo, githubToken, onTrace, onCreatePR
                   <ScrollText size={14} /> Reasoning trace
                 </button>
               )}
+              {codeBlocks.length === 0 && steps.some((s) => s.agent === 'lld') && onAsk && (
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => onAsk('Implement the plan above. Return complete files with their repository paths, '
+                    + 'including tests if the repository has a test suite.')}
+                >
+                  <Braces size={14} /> Implement this plan
+                </button>
+              )}
               {codeBlocks.length > 0 && !named && (
                 <button className="btn btn-outline btn-sm" onClick={() => onCreatePR({ ...prContext, files: filesFromBlocks(codeBlocks) })}>
                   <GitPullRequest size={14} /> Open pull request
